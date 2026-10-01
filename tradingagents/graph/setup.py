@@ -21,7 +21,7 @@ from tradingagents.agents import (
     create_trader,
 )
 from tradingagents.agents.analysts.turn import WRAP_UP
-from tradingagents.agents.state import AgentState
+from tradingagents.agents.state import AgentState, AnalystState, ResearchState
 
 from .analyst_execution import build_analyst_execution_plan
 from .conditional_logic import ConditionalLogic
@@ -50,7 +50,7 @@ def _tools_or_done(state) -> str:
     return "tools" if state["messages"][-1].tool_calls else END
 
 
-def _analyst_graph(spec, agent, max_tool_rounds: int):
+def _analyst_graph(spec, agent, max_tool_rounds: int, state_schema=AgentState):
     """One analyst as a graph of its own: the model and its tools, on a private message history.
 
     It returns only its report, so analysts running side by side never write the
@@ -60,7 +60,7 @@ def _analyst_graph(spec, agent, max_tool_rounds: int):
     cannot run the graph into its recursion limit (#1420).
     """
     output = TypedDict(f"{spec.key.capitalize()}Report", {spec.report_key: str})
-    graph = StateGraph(AgentState, output_schema=output)
+    graph = StateGraph(state_schema, output_schema=output)
     graph.add_node("agent", agent)
     graph.add_edge(START, "agent")
     if not spec.tools:
@@ -106,26 +106,58 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
         self.max_tool_rounds = max_tool_rounds
 
-    def setup_graph(
-        self, selected_analysts=("market", "social", "news", "fundamentals")
-    ):
-        """Set up and compile the agent workflow graph.
-
-        Args:
-            selected_analysts (list): List of analyst types to include. Options are:
-                - "market": Market analyst
-                - "social": Sentiment analyst
-                - "news": News analyst
-                - "fundamentals": Fundamentals analyst
-        """
+    def _build_analyst_nodes(self, selected_analysts, state_schema=AgentState):
+        """Build the selected analyst subgraphs shared by both graph shapes."""
         plan = build_analyst_execution_plan(selected_analysts)
-
         analyst_factories = {
             "market": lambda: create_market_analyst(self.quick_thinking_llm),
             "social": lambda: create_sentiment_analyst(self.quick_thinking_llm),
             "news": lambda: create_news_analyst(self.quick_thinking_llm),
             "fundamentals": lambda: create_fundamentals_analyst(self.quick_thinking_llm),
         }
+        nodes = {
+            spec.agent_node: _analyst_graph(
+                spec,
+                analyst_factories[spec.key](),
+                self.max_tool_rounds,
+                state_schema=state_schema,
+            )
+            for spec in plan.specs
+        }
+        return plan, nodes
+
+    def setup_research_graph(
+        self, selected_analysts=("market", "social", "news", "fundamentals")
+    ):
+        """Build a graph that runs analysts in parallel and then ends.
+
+        Unlike :meth:`setup_graph`, this shape has no bull/bear debate,
+        Research Manager, trader, risk team, portfolio manager, or trade-decision nodes.
+        """
+        _, analyst_nodes = self._build_analyst_nodes(
+            selected_analysts,
+            state_schema=AnalystState,
+        )
+        workflow = StateGraph(ResearchState)
+        for name, node in analyst_nodes.items():
+            workflow.add_node(name, node)
+
+        analysts = list(analyst_nodes)
+        for name in analysts:
+            workflow.add_edge(START, name)
+        workflow.add_edge(analysts, END)
+        return workflow
+
+    def setup_graph(
+        self, selected_analysts=("market", "social", "news", "fundamentals")
+    ):
+        """Set up and compile the full trading workflow graph.
+
+        Args:
+            selected_analysts (list): Analyst types to include: market, social,
+                news, and/or fundamentals.
+        """
+        _, analyst_nodes = self._build_analyst_nodes(selected_analysts)
 
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
         bear_researcher_node = create_bear_researcher(self.quick_thinking_llm)
@@ -139,9 +171,8 @@ class GraphSetup:
 
         workflow = StateGraph(AgentState)
 
-        for spec in plan.specs:
-            workflow.add_node(spec.agent_node,
-                              _analyst_graph(spec, analyst_factories[spec.key](), self.max_tool_rounds))
+        for name, node in analyst_nodes.items():
+            workflow.add_node(name, node)
 
         workflow.add_node("Bull Researcher", bull_researcher_node)
         workflow.add_node("Bear Researcher", bear_researcher_node)
@@ -154,7 +185,7 @@ class GraphSetup:
 
         # The analysts work at the same time; the research debate starts once
         # every one of them has filed its report.
-        analysts = [spec.agent_node for spec in plan.specs]
+        analysts = list(analyst_nodes)
         for node in analysts:
             workflow.add_edge(START, node)
         workflow.add_edge(analysts, "Bull Researcher")

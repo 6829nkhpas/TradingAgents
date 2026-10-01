@@ -1,5 +1,6 @@
-"""The Responses API only exists on native OpenAI; a custom base_url on the
-openai provider must fall back to Chat Completions (#1024)."""
+"""Custom ``openai`` endpoints stay on Chat Completions unless a provider-specific
+model prefix explicitly selects the Responses API (#1024, OmniRoute Codex).
+"""
 
 from __future__ import annotations
 

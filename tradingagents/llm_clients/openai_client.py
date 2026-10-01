@@ -185,11 +185,11 @@ class ProviderSpec:
     """Declarative config for one OpenAI-compatible provider.
 
     The OpenAI-compatible family (OpenAI, xAI, DeepSeek, Qwen, GLM, MiniMax,
-    OpenRouter, Ollama, and any user endpoint) all speak the same Chat
-    Completions API and differ only by these fields — so one row here replaces
-    the former per-provider base-URL dict, auth handling, and client-class
-    branches. Native Anthropic / Google use their own clients (genuinely
-    different APIs) and are intentionally NOT in this registry.
+    OpenRouter, Ollama, and any user endpoint) uses Chat Completions by default
+    and differs by these fields. Provider/model-specific routes can opt into the
+    Responses API (for example, OmniRoute's ``cx/`` Codex models). Native
+    Anthropic / Google use their own clients (genuinely different APIs) and are
+    intentionally NOT in this registry.
 
     The API-key env var stays in ``api_key_env.PROVIDER_API_KEY_ENV`` (the single
     source consulted by both this client and the CLI prompt); only behavior that
@@ -204,6 +204,7 @@ class ProviderSpec:
     placeholder_key: str = "EMPTY"            # sent when no key is available (keyless local servers)
     require_base_url: bool = False            # error if no base_url is resolved (generic endpoint)
     use_responses_api: bool = False           # native OpenAI Responses API
+    responses_api_model_prefixes: tuple[str, ...] = ()  # model IDs routed through Responses
 
 
 # Single source of truth for the OpenAI-compatible provider family. Dual-region
@@ -228,8 +229,12 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, ProviderSpec] = {
                                key_optional=True, placeholder_key="ollama",
                                chat_class=LocalCompatibleChatOpenAI),
     # Generic endpoint: user supplies base_url; key optional (keyless local).
+    # OmniRoute uses its cx/ prefix for Codex models served on /v1/responses.
     "openai_compatible": ProviderSpec(
-        require_base_url=True, key_optional=True, chat_class=LocalCompatibleChatOpenAI
+        require_base_url=True,
+        key_optional=True,
+        chat_class=LocalCompatibleChatOpenAI,
+        responses_api_model_prefixes=("cx/",),
     ),
 }
 
@@ -242,10 +247,9 @@ def is_openai_compatible(provider: str) -> bool:
 def _is_native_openai_base_url(base_url: str | None) -> bool:
     """True when ``base_url`` is unset or points at api.openai.com.
 
-    The Responses API (/v1/responses) only exists on native OpenAI. A custom
-    base_url on the ``openai`` provider (a proxy, gateway, or local server)
-    speaks only Chat Completions, so the Responses API must stay off there even
-    though the provider spec enables it (#1024).
+    The ``openai`` provider uses Responses only for native OpenAI endpoints;
+    custom gateways stay on Chat Completions unless their provider spec opts a
+    model prefix into Responses (as OmniRoute does for ``cx/``).
     """
     if not base_url:
         return True
@@ -258,10 +262,10 @@ def _is_native_openai_base_url(base_url: str | None) -> bool:
 class OpenAIClient(BaseLLMClient):
     """Client for OpenAI, Ollama, OpenRouter, and xAI providers.
 
-    For native OpenAI models, uses the Responses API (/v1/responses) which
-    supports reasoning_effort with function tools across all model families
-    (GPT-4.1, GPT-5). Third-party compatible providers (xAI, OpenRouter,
-    Ollama) use standard Chat Completions.
+    Native OpenAI models use the Responses API (/v1/responses), which supports
+    reasoning_effort with function tools across model families. Third-party
+    compatible providers use Chat Completions by default; provider-declared
+    model prefixes such as OmniRoute's ``cx/`` opt into Responses.
     """
 
     def __init__(
@@ -314,10 +318,17 @@ class OpenAIClient(BaseLLMClient):
                     f"(e.g. add {api_key_env}=your_key to your .env file)."
                 )
 
-            # The Responses API only exists on native OpenAI; if the user points
-            # the openai provider at a custom base_url (proxy/gateway/local), it
-            # only speaks Chat Completions, so keep Responses off there (#1024).
-            if spec.use_responses_api and _is_native_openai_base_url(base_url):
+            # Native OpenAI uses Responses by default. Custom endpoints stay on
+            # Chat Completions unless their registry entry marks a model prefix
+            # as Responses-only (OmniRoute's cx/ Codex route).
+            responses_for_model = any(
+                self.model.lower().startswith(prefix.lower())
+                for prefix in spec.responses_api_model_prefixes
+            )
+            use_responses_api = (
+                spec.use_responses_api and _is_native_openai_base_url(base_url)
+            ) or responses_for_model
+            if use_responses_api:
                 llm_kwargs["use_responses_api"] = True
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url

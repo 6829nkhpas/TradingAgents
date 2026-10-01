@@ -1,8 +1,8 @@
 """Generic OpenAI-compatible provider (vLLM / LM Studio / llama.cpp / relays).
 
 Verifies the user-supplied base_url is required and honored, the key is optional
-(keyless local default), Chat Completions (not the Responses API) is used, any
-model name is accepted, and the env backend URL precedence (#978).
+(keyless local default), Chat Completions is the default, OmniRoute Codex models
+use Responses, any model name is accepted, and env backend URL precedence (#978).
 """
 
 import pytest
@@ -41,6 +41,58 @@ def test_keyless_local_uses_placeholder_and_chat_completions(monkeypatch):
     assert key == "EMPTY"
     # must use Chat Completions, not OpenAI's Responses API
     assert getattr(llm, "use_responses_api", False) in (False, None)
+
+
+@pytest.mark.unit
+def test_omniroute_codex_model_uses_responses_api(monkeypatch):
+    import httpx
+
+    requests = []
+
+    def handler(request):
+        requests.append((request.method, request.url.path))
+        return httpx.Response(200, json={
+            "id": "resp_test",
+            "created_at": 1770000000,
+            "model": "cx/gpt-5.5",
+            "object": "response",
+            "output": [{
+                "id": "msg_test",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "mock response", "annotations": []}],
+            }],
+            "parallel_tool_calls": True,
+            "tool_choice": "auto",
+            "tools": [],
+            "status": "completed",
+            "usage": {
+                "input_tokens": 1,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens": 2,
+                "output_tokens_details": {"reasoning_tokens": 0},
+                "total_tokens": 3,
+            },
+        })
+
+    http_client = httpx.Client(transport=httpx.MockTransport(handler))
+    try:
+        llm = create_llm_client(
+            provider="openai_compatible",
+            model="cx/gpt-5.5",
+            base_url="https://omniroute.example/v1",
+            api_key="sk-test",
+            http_client=http_client,
+        ).get_llm()
+        assert isinstance(llm, LocalCompatibleChatOpenAI)
+        assert llm.use_responses_api is True
+        assert str(llm.openai_api_base) == "https://omniroute.example/v1"
+        assert llm.invoke("Say hello").content == "mock response"
+    finally:
+        http_client.close()
+
+    assert requests == [("POST", "/v1/responses")]
 
 
 @pytest.mark.unit

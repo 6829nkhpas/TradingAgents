@@ -43,6 +43,20 @@ _FOREX_CURRENCIES = frozenset(
 _CRYPTO_BASES = frozenset(
     {"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "LTC", "BCH", "DOT", "AVAX", "LINK"}
 )
+_CRYPTO_NAME_ALIASES = {
+    "BITCOIN": "BTC",
+    "ETHER": "ETH",
+    "ETHEREUM": "ETH",
+    "SOLANA": "SOL",
+    "RIPPLE": "XRP",
+    "CARDANO": "ADA",
+    "DOGECOIN": "DOGE",
+    "LITECOIN": "LTC",
+    "BITCOIN CASH": "BCH",
+    "POLKADOT": "DOT",
+    "AVALANCHE": "AVAX",
+    "CHAINLINK": "LINK",
+}
 
 # Explicit aliases for instruments whose broker symbol does not map to a
 # Yahoo symbol by rule. Metals/energy resolve to their front-month future;
@@ -142,6 +156,44 @@ def normalize_symbol(raw: str) -> str:
     if canonical != raw.strip().upper():
         logger.info("Resolved symbol %r to Yahoo symbol %r", raw, canonical)
     return canonical
+
+
+def looks_like_crypto_symbol(raw: str) -> bool:
+    """Whether a ticker is syntactically recognizable as a crypto asset.
+
+    This is a convenience for API inputs, not a market-data lookup. Callers can
+    still pass ``asset_type="crypto"`` for a newly listed or less common coin.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        return False
+
+    symbol = raw.strip().upper().rstrip("+").replace("/", "-")
+    if symbol in _CRYPTO_NAME_ALIASES or symbol in _CRYPTO_BASES or crypto_base(symbol):
+        return True
+    if re.fullmatch(r"[A-Z0-9]{1,15}-(?:USD|USDT|USDC)", symbol):
+        return True
+
+    compact = symbol.replace("-", "")
+    return any(compact.endswith(quote) and len(compact) > len(quote) for quote in _CRYPTO_QUOTES)
+
+
+def normalize_crypto_symbol(raw: str) -> str:
+    """Normalize a crypto name or quote pair to Yahoo's ``BASE-USD`` format.
+
+    Explicitly selecting the crypto asset type lets callers use less common
+    bases such as ``SHIB``, even when that base is not in the small set used by
+    :func:`crypto_base` for social-feed cashtags.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("crypto symbol must be a non-empty string")
+
+    symbol = raw.strip().upper().rstrip("+")
+    symbol = _CRYPTO_NAME_ALIASES.get(symbol, symbol)
+    compact = symbol.replace("-", "").replace("/", "")
+    for quote in _CRYPTO_QUOTES:
+        if compact.endswith(quote) and len(compact) > len(quote):
+            return f"{compact[:-len(quote)]}-USD"
+    return f"{compact}-USD"
 
 
 # Tickers can contain letters, digits, dot, dash, underscore, caret

@@ -55,6 +55,7 @@ def test_key_optionality():
     assert OPENAI_COMPATIBLE_PROVIDERS["ollama"].key_optional is True
     assert OPENAI_COMPATIBLE_PROVIDERS["openai_compatible"].key_optional is True
     assert OPENAI_COMPATIBLE_PROVIDERS["openai_compatible"].require_base_url is True
+    assert OPENAI_COMPATIBLE_PROVIDERS["openai_compatible"].responses_api_model_prefixes == ("cx/",)
     assert OPENAI_COMPATIBLE_PROVIDERS["xai"].key_optional is False
     # OLLAMA_BASE_URL is the only base-URL env override.
     assert OPENAI_COMPATIBLE_PROVIDERS["ollama"].base_url_env == "OLLAMA_BASE_URL"

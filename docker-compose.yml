@@ -8,6 +8,23 @@ services:
     tty: true
     stdin_open: true
 
+  research-api:
+    build:
+      context: .
+      args:
+        INSTALL_API: "true"
+    env_file:
+      - .env
+    environment:
+      TRADINGAGENTS_API_HOST: 0.0.0.0
+      TRADINGAGENTS_API_PORT: ${TRADINGAGENTS_API_PORT:-8000}
+    ports:
+      - "${TRADINGAGENTS_API_PORT:-8000}:${TRADINGAGENTS_API_PORT:-8000}"
+    volumes:
+      - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
+    entrypoint: ["tradingagents-api"]
+    restart: unless-stopped
+
   ollama:
     image: ollama/ollama:latest
     volumes:

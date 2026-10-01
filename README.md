@@ -56,7 +56,7 @@ Full release notes are in [CHANGELOG.md](CHANGELOG.md).
 
 <div align="center">
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🔌 [Research API](#research-only-rest-api) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
 
 </div>
 
@@ -154,6 +154,79 @@ For local models with Ollama:
 docker compose --profile ollama run --rm tradingagents-ollama
 ```
 
+## Research-only REST API
+
+The optional REST API exposes the existing research analysts as a service. It runs the Market, Sentiment, News, and (for stocks) Fundamentals analysts in parallel and returns their full reports as JSON, along with the configured data-source platforms. It intentionally does **not** run the bull/bear debate, Research Manager, trader, risk team, portfolio manager, trade-decision, or execution flows. The existing CLI and full TradingAgents workflow remain available separately.
+
+### Run locally
+
+Install the API extra and set an LLM provider key using the [provider instructions below](#required-apis):
+
+```bash
+pip install ".[api]"
+export OPENAI_API_KEY=...             # or configure another supported provider
+export TRADINGAGENTS_API_KEY=...      # recommended if the endpoint is reachable by others
+tradingagents-api
+```
+
+The server listens on `0.0.0.0:8000` by default. Set `TRADINGAGENTS_API_HOST` or `TRADINGAGENTS_API_PORT` to change it. Interactive OpenAPI documentation is available at `http://localhost:8000/docs`; `GET /health` is a lightweight liveness check.
+
+### Analyze a symbol
+
+Send a ticker/symbol in the JSON body. Common crypto names and pairs such as `Bitcoin`, `BTC`, and `BTC-USD` are recognized automatically; set `asset_type` to `crypto` for less common coins. For stocks, use the ticker (for example `AAPL`, `NVDA`, or `7203.T`). An optional past `analysis_date` is supported; future dates are rejected.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/research \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TRADINGAGENTS_API_KEY" \
+  -d '{"symbol":"BTC-USD"}'
+```
+
+Request example for a stock:
+
+```json
+{
+  "symbol": "NVDA",
+  "asset_type": "stock",
+  "analysis_date": "2026-09-30"
+}
+```
+
+Response shape (the report values are full Markdown analyses):
+
+```json
+{
+  "symbol": "NVDA",
+  "asset_type": "stock",
+  "analysis_date": "2026-09-30",
+  "generated_at": "2026-10-01T12:00:00+00:00",
+  "research": {
+    "market": "... technical analysis ...",
+    "sentiment": "... social sentiment analysis ...",
+    "news": "... news and macro analysis ...",
+    "fundamentals": "... company fundamentals ..."
+  },
+  "configured_sources": {
+    "market": ["Yahoo Finance"],
+    "sentiment": ["Yahoo Finance", "StockTwits", "Reddit"],
+    "news": ["Yahoo Finance", "FRED", "Polymarket"],
+    "fundamentals": ["Yahoo Finance", "SEC EDGAR"]
+  },
+  "notices": ["Configured sources may be unavailable or rate-limited; see each report for data gaps."],
+  "disclaimer": "Research and analytics only; not financial or investment advice."
+}
+```
+
+For crypto, `research.fundamentals` is `null` and its configured source list is empty. Source lists describe the vendors configured/available for the run; individual reports call out sources that were unavailable or had no data. The default setup can draw from Yahoo Finance, SEC EDGAR, StockTwits, Reddit, FRED, Polymarket, and Alpha Vantage depending on configuration and instrument coverage.
+
+To run the API in Docker, copy `.env.example` to `.env`, add your provider keys and a strong `TRADINGAGENTS_API_KEY`, then run:
+
+```bash
+docker compose up --build research-api
+```
+
+The API is unauthenticated when `TRADINGAGENTS_API_KEY` is unset. Do not expose that configuration publicly; add network-level access controls and rate limiting when deploying to the internet. This service provides research/analytics only, not financial or investment advice.
+
 ### Required APIs
 
 TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
@@ -187,6 +260,8 @@ For AWS Bedrock, install the extra with `pip install ".[bedrock]"`, set `llm_pro
 For local models, configure Ollama with `llm_provider: "ollama"`. The default endpoint is `http://localhost:11434/v1`; set `OLLAMA_BASE_URL` to point at a remote `ollama-serve`. Pull models with `ollama pull <name>`, and pick "Custom model ID" in the CLI for any model not listed by default.
 
 For any other OpenAI-compatible server (vLLM, LM Studio, llama.cpp, or a custom relay), use `llm_provider: "openai_compatible"` and set the endpoint via `backend_url` (or `TRADINGAGENTS_LLM_BACKEND_URL`), e.g. `http://localhost:8000/v1` for vLLM or `http://localhost:1234/v1` for LM Studio. The model is whatever your server serves. No key is needed for local servers; set `OPENAI_COMPATIBLE_API_KEY` when the endpoint requires one.
+
+For OmniRoute, use the `/v1` **base URL**, not a full endpoint path. With `llm_provider: "openai_compatible"`, `cx/` Codex models (for example `cx/gpt-5.5`) automatically use LangChain's Responses API client and send requests to `/v1/responses`; other compatible model IDs continue using `/v1/chat/completions`. The provided endpoint and model are shown in `.env.example`. This follows OmniRoute's [API/client documentation](https://omni.inamoriyama.com/docs) and [Codex configuration guide](https://github.com/diegosouzapw/OmniRoute/wiki/Codex-CLI-Configuration), which use `cx/gpt-5.5` with the Responses wire API.
 
 With `TYPESAFE_API_KEY` set, the Sentiment Analyst screens StockTwits and Reddit posts with TypeSafe's Jev before reading them. Posts that are not about the company are dropped, and each source opens with a count of the remaining posts by stance: bullish, bearish, neutral, or unclear. Without the key, posts pass through unscreened. `jev-latest` moves with new releases; set `TYPESAFE_DEFAULT_MODEL` to a versioned ID such as `jev-1.13.0` to hold it fixed across runs.
 

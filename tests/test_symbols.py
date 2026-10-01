@@ -5,7 +5,12 @@ import unittest
 import pytest
 
 from tradingagents.dataflows.errors import NoMarketDataError
-from tradingagents.dataflows.symbols import crypto_base, normalize_symbol
+from tradingagents.dataflows.symbols import (
+    crypto_base,
+    looks_like_crypto_symbol,
+    normalize_crypto_symbol,
+    normalize_symbol,
+)
 
 
 @pytest.mark.unit
@@ -85,6 +90,22 @@ class TestNoMarketDataError(unittest.TestCase):
 
 
 @pytest.mark.unit
+class TestCryptoRequestSymbols(unittest.TestCase):
+    def test_detects_common_crypto_symbols_and_pairs(self):
+        for raw in ("BTC", "BTC-USD", "BTCUSD", "ETH/USDT", "SHIB-USD", "Bitcoin"):
+            self.assertTrue(looks_like_crypto_symbol(raw), raw)
+        self.assertFalse(looks_like_crypto_symbol("AAPL"))
+
+    def test_normalizes_crypto_names_and_quotes_to_yahoo_usd_pairs(self):
+        for raw, expected in (
+            ("BTC", "BTC-USD"),
+            ("bitcoin", "BTC-USD"),
+            ("ETH/USDT", "ETH-USD"),
+            ("SHIBUSDT", "SHIB-USD"),
+        ):
+            self.assertEqual(normalize_crypto_symbol(raw), expected)
+
+
 class TestCryptoBase(unittest.TestCase):
     def test_resolves_known_crypto_forms(self):
         for raw in ("BTC-USD", "BTCUSD", "btc-usdt", "BTC-USDC", "BTCUSD+"):

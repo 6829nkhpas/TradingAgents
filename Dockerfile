@@ -8,7 +8,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
 COPY . .
-RUN pip install --no-cache-dir .
+ARG INSTALL_API=false
+RUN if [ "$INSTALL_API" = "true" ]; then \
+      pip install --no-cache-dir ".[api]"; \
+    else \
+      pip install --no-cache-dir .; \
+    fi
 
 FROM python:3.13-slim
 
