@@ -22,6 +22,7 @@ import logging
 from datetime import datetime
 from urllib.request import Request, urlopen
 
+from tradingagents.dataflows import evidence
 from tradingagents.dataflows.date_window import coverage_gap, in_window
 from tradingagents.dataflows.symbols import crypto_base
 
@@ -60,15 +61,25 @@ def _body(message) -> str:
     return html.unescape(message.get("body") or "")
 
 
-def _stocktwits_symbol(ticker: str) -> str:
+def _stocktwits_symbol(ticker: str, asset_type: str | None = None) -> str:
     """Map a crypto pair to StockTwits' ``<BASE>.X`` convention.
 
     StockTwits lists crypto as ``BTC.X`` (Yahoo's ``BTC-USD`` form 404s), so any
     crypto symbol resolves to its base plus ``.X``; other symbols pass through
-    upper-cased.
+    upper-cased. With ``asset_type="crypto"`` a long-tail coin (``SHIB-USD``)
+    maps too, not only the well-known bases.
     """
-    base = crypto_base(ticker)
+    base = crypto_base(ticker, any_base=asset_type == "crypto")
     return f"{base}.X" if base else ticker.strip().upper()
+
+
+def _message_url(message) -> str | None:
+    """The public StockTwits page of a message, when its id and author are known."""
+    message_id = message.get("id")
+    username = (message.get("user") or {}).get("username")
+    if message_id and username:
+        return f"https://stocktwits.com/{username}/message/{message_id}"
+    return None
 
 
 def fetch_stocktwits_messages(
@@ -78,6 +89,7 @@ def fetch_stocktwits_messages(
     start_date: str | None = None,
     end_date: str | None = None,
     screen=None,
+    asset_type: str | None = None,
 ) -> str:
     """Fetch recent StockTwits messages for ``ticker`` and return them as a
     formatted plaintext block ready for prompt injection.
@@ -94,7 +106,7 @@ def fetch_stocktwits_messages(
     symbol has no messages, or the response shape is unexpected — the
     caller never has to special-case None or exceptions.
     """
-    url = _API.format(ticker=_stocktwits_symbol(ticker))
+    url = _API.format(ticker=_stocktwits_symbol(ticker, asset_type))
     req = Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
     try:
         with urlopen(req, timeout=timeout) as resp:
@@ -149,6 +161,14 @@ def fetch_stocktwits_messages(
             unlabeled += 1
             tag = "no-label"
         lines.append(f"[{created} · @{user} · {tag}] {body}")
+        evidence.record(
+            type="social_post",
+            title=body,
+            source="StockTwits",
+            url=_message_url(m),
+            published_at=created,
+            stance=sentiment if sentiment in ("Bullish", "Bearish") else None,
+        )
 
     total = bullish + bearish + unlabeled
     bull_pct = round(100 * bullish / total) if total else 0

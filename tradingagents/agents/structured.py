@@ -92,4 +92,12 @@ def invoke_structured_or_freetext(
     result = invoke_structured(structured_llm, prompt, agent_name)
     if result is not None:
         return render(result)
-    return plain_llm.invoke(prompt).content
+    content = plain_llm.invoke(prompt).content
+    if isinstance(content, list):
+        # Some providers answer with typed blocks; the report is the text blocks.
+        content = "\n".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+            if isinstance(block, str) or (isinstance(block, dict) and block.get("type") == "text")
+        )
+    return content

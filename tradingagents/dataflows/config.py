@@ -7,9 +7,9 @@ import tradingagents.default_config as default_config
 # Use default config but allow it to be overridden
 _config: dict | None = None
 
-# The config of the run in progress. A graph binds its own for the length of a
-# run, so the data tools it calls read that graph's vendors even when several
-# graphs share a process. LangGraph carries the context into tool calls.
+# The config of the run in progress. A research run binds its own for its
+# length, so the data tools it calls read that run's vendors even when several
+# requests share a process. LangGraph carries the context into tool calls.
 _run_config: ContextVar[dict | None] = ContextVar("tradingagents_run_config", default=None)
 
 
@@ -34,7 +34,7 @@ def set_config(config: dict):
     """Update the configuration with custom values.
 
     Dict-valued keys (e.g. ``data_vendors``) are merged one level deep so a
-    partial update like ``{"data_vendors": {"core_stock_apis": "alpha_vantage"}}``
+    partial update like ``{"data_vendors": {"news_data": "alpha_vantage"}}``
     keeps the other nested keys from the default; scalar keys are replaced.
     """
     initialize_config()

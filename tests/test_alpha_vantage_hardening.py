@@ -3,8 +3,7 @@
 Regressions for #990 (no request timeout -> can hang), #991 (invalid-key
 responses mislabeled as rate limits and silently treated as transient), and
 #1115 (fundamentals look-ahead filter never ran because the payload is a JSON
-string, not a dict), and the date trim that keeps post-end_date bars out of a
-historical run.
+string, not a dict).
 """
 import json
 
@@ -13,7 +12,6 @@ import pytest
 import tradingagents.dataflows.net as net
 import tradingagents.dataflows.vendors.alpha_vantage.common as av
 import tradingagents.dataflows.vendors.alpha_vantage.fundamentals as avf
-import tradingagents.dataflows.vendors.alpha_vantage.stock as avs
 
 
 class _FakeResponse:
@@ -83,43 +81,6 @@ def test_fundamentals_no_curr_date_passes_through(monkeypatch):
     assert avf.get_income_statement("AAPL") == _FUNDAMENTALS_JSON
 
 
-# ---------------------------------------------------------------------------
-# Date trim (see the rationale on the unguarded trim in alpha_vantage.common)
-# ---------------------------------------------------------------------------
-
-_DAILY_CSV = (
-    "timestamp,open,high,low,close,volume\n"
-    "2024-05-13,1,1,1,1,10\n"   # after end_date -> must never be served
-    "2024-05-10,1,1,1,1,10\n"
-    "2024-05-09,1,1,1,1,10\n"
-)
-
-
-@pytest.mark.unit
-def test_stock_data_is_trimmed_to_the_requested_window(monkeypatch):
-    monkeypatch.setattr(avs, "_make_api_request", lambda *a, **k: _DAILY_CSV)
-    out = avs.get_stock("IBM", "2024-05-09", "2024-05-10")
-    assert "2024-05-10" in out and "2024-05-09" in out
-    assert "2024-05-13" not in out, "bar after end_date leaked into the window"
-
-
-@pytest.mark.unit
-def test_unparseable_body_is_never_served_untrimmed(monkeypatch):
-    """The trim used to swallow the failure and return the whole body, putting
-    bars after end_date into a backtest. It must raise instead."""
-    monkeypatch.setattr(avs, "_make_api_request",
-                        lambda *a, **k: "timestamp,close\nnot-a-date,1\n")
-
-    with pytest.raises(ValueError):
-        avs.get_stock("IBM", "2024-05-09", "2024-05-10")
-
-
-@pytest.mark.unit
-def test_empty_body_still_passes_through(monkeypatch):
-    monkeypatch.setattr(avs, "_make_api_request", lambda *a, **k: "")
-    assert avs.get_stock("IBM", "2024-05-09", "2024-05-10") == ""
-
-
 def test_request_error_message_carries_no_key(monkeypatch):
     # Alpha Vantage also sends its key in the URL (#1324).
     import requests
@@ -165,18 +126,6 @@ def test_the_news_window_includes_the_analysis_day(monkeypatch):
 
     assert seen["time_from"] == "20260310T0000"
     assert seen["time_to"] == "20260314T2359"
-
-
-@pytest.mark.unit
-@pytest.mark.parametrize("indicator", ["vwma", "mfi"])
-def test_an_indicator_this_vendor_lacks_lets_the_next_one_serve_it(indicator):
-    """Returning prose counts as success to the router, so the chain stops at a
-    vendor that cannot compute the indicator while the next one can."""
-    from tradingagents.dataflows.errors import VendorError
-    from tradingagents.dataflows.vendors.alpha_vantage import indicator as alpha_vantage_indicator
-
-    with pytest.raises(VendorError):
-        alpha_vantage_indicator.get_indicator("AAPL", indicator, "2026-05-08", 30)
 
 
 @pytest.mark.unit

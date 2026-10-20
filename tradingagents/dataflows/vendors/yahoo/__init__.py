@@ -1,1 +1,1 @@
-"""Yahoo Finance: prices, indicators, statements, insider filings and news."""
+"""Yahoo Finance: company and crypto profiles, statements, insider filings and news."""

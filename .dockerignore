@@ -1,6 +1,9 @@
 .git
+.github
 .venv
+source
 .env
+.env.enterprise
 .claude
 .idea
 .vscode
@@ -11,5 +14,8 @@ build
 dist
 results
 eval_results
+tests
+assets
+*_research*.json
 Dockerfile
 docker-compose.yml

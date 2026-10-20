@@ -114,7 +114,13 @@ def _ticker_with(articles, monkeypatch):
         def get_news(self, count=20):
             return articles
 
+    class EmptySearch:
+        # An empty ticker feed falls back to a keyword search; it finds nothing too.
+        def __init__(self, *a, **k):
+            self.news = []
+
     monkeypatch.setattr(ynews.yf, "Ticker", FakeTicker)
+    monkeypatch.setattr(ynews.yf, "Search", EmptySearch)
 
 
 @pytest.mark.unit

@@ -29,8 +29,9 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from tradingagents.dataflows import evidence
 from tradingagents.dataflows.date_window import coverage_gap, in_window
-from tradingagents.dataflows.symbols import crypto_base
+from tradingagents.dataflows.symbols import crypto_base, looks_like_crypto_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,16 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+CRYPTO_SUBREDDITS = ("CryptoCurrency", "CryptoMarkets")
+COIN_SUBREDDITS = {
+    "BNB": ("binance", "CryptoCurrency"),
+    "BTC": ("Bitcoin", "CryptoCurrency"),
+    "ETH": ("ethereum", "CryptoCurrency"),
+    "SOL": ("solana", "CryptoCurrency"),
+    "XRP": ("ripple", "CryptoCurrency"),
+    "DOGE": ("dogecoin", "CryptoCurrency"),
+    "ADA": ("cardano", "CryptoCurrency"),
+}
 
 # Reddit's maximum page size. A week of posts for a ticker across the default
 # subreddits fits well inside one page, which keeps a high-volume subreddit from
@@ -217,6 +228,7 @@ def _fetch_subreddit_rss(
         published_el = entry.find("atom:published", _ATOM_NS)
         content_el = entry.find("atom:content", _ATOM_NS)
         category_el = entry.find("atom:category", _ATOM_NS)
+        link_el = entry.find("atom:link", _ATOM_NS)
         posts.append({
             "title": (title_el.text if title_el is not None else "") or "",
             "created_utc": _iso_to_timestamp(
@@ -227,8 +239,22 @@ def _fetch_subreddit_rss(
             # feed may omit it, and then it can only be that one.
             "subreddit": category_el.get("term") if category_el is not None
             else (sub if "+" not in sub else ""),
+            "url": (link_el.get("href") if link_el is not None else "") or "",
         })
     return posts
+
+
+def subreddits_for(ticker: str, asset_type: str | None = None) -> tuple[str, ...]:
+    """The subreddits searched for ``ticker`` by default.
+
+    A coin with its own community searches that and r/CryptoCurrency; any other
+    crypto asset the general crypto subreddits; everything else the finance ones.
+    """
+    is_crypto = asset_type == "crypto" or looks_like_crypto_symbol(ticker) or bool(crypto_base(ticker))
+    if not is_crypto:
+        return DEFAULT_SUBREDDITS
+    base = crypto_base(ticker, any_base=True) or ticker.strip().upper().split("-")[0]
+    return COIN_SUBREDDITS.get(base, CRYPTO_SUBREDDITS)
 
 
 def fetch_reddit_posts(
@@ -240,6 +266,7 @@ def fetch_reddit_posts(
     start_date: str | None = None,
     end_date: str | None = None,
     screen=None,
+    asset_type: str | None = None,
 ) -> str:
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
@@ -257,9 +284,15 @@ def fetch_reddit_posts(
     flag per post and a note line that heads the block. It runs before the
     per-subreddit cut, so the posts it keeps fill the slots.
     """
+    # The default subreddits follow the instrument: a crypto asset is searched
+    # in crypto communities, not r/wallstreetbets.
+    if subreddits is DEFAULT_SUBREDDITS or subreddits is None:
+        subreddits = subreddits_for(ticker, asset_type)
+
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
-    ticker = crypto_base(ticker) or ticker
+    ticker = crypto_base(ticker, any_base=asset_type == "crypto") or ticker
+
     subreddits = list(subreddits)
     label = ", ".join(f"r/{s}" for s in subreddits)
     fetched = _fetch_subreddit_rss(ticker, "+".join(subreddits), _FEED_PAGE, timeout)
@@ -317,6 +350,13 @@ def fetch_reddit_posts(
             lines.append(
                 f"  [{created_str}] {title}"
                 + (f"\n    body excerpt: {selftext}" if selftext else "")
+            )
+            evidence.record(
+                type="social_post",
+                title=title,
+                source=f"Reddit r/{sub}",
+                url=p.get("url"),
+                published_at=created,
             )
         blocks.append("\n".join(lines))
     return "\n\n".join(([note] if note else []) + blocks)

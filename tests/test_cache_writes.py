@@ -4,12 +4,10 @@ concurrent writers (tool calls run in parallel) never share a temp file."""
 import os
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from tradingagents.dataflows import files
 from tradingagents.dataflows.vendors import sec_edgar
-from tradingagents.dataflows.vendors.yahoo import ohlcv
 
 
 def _recording_replace(monkeypatch):
@@ -37,21 +35,6 @@ def test_sec_edgar_writers_never_share_a_temp_file(monkeypatch, tmp_path):
     temps = [src for src, _ in moves]
     assert len(set(temps)) == 2
     assert all(src.parent == dst.parent for src, dst in moves)
-
-
-@pytest.mark.unit
-def test_the_price_cache_is_replaced_whole(monkeypatch, tmp_path):
-    frame = pd.DataFrame({"Date": pd.bdate_range("2026-01-02", periods=3), "Open": 1.0, "High": 1.0,
-                          "Low": 1.0, "Close": 1.0, "Volume": 1})
-    monkeypatch.setattr(ohlcv, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
-    monkeypatch.setattr(ohlcv.yf, "Ticker", lambda s: type("T", (), {"history": lambda self, **k: frame.set_index("Date")})())
-    moves = _recording_replace(monkeypatch)
-
-    ohlcv.load_ohlcv("AAPL", "2026-01-06")
-
-    assert [dst.name for _, dst in moves] == ["AAPL-YFin-data.csv"]
-    assert moves[0][0].parent == tmp_path and moves[0][0] != moves[0][1]
-    assert not list(tmp_path.glob("*.tmp*"))
 
 
 @pytest.mark.unit

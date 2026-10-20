@@ -17,18 +17,9 @@ _AGENTS_DIR = Path(__file__).resolve().parents[1] / "tradingagents" / "agents"
 # Every node whose text reaches the saved report. If you add a report-producing
 # agent, add it here — and make it call get_language_instruction().
 REPORT_AGENTS = [
-    "analysts/market_analyst.py",
     "analysts/news_analyst.py",
     "analysts/fundamentals_analyst.py",
     "analysts/sentiment_analyst.py",
-    "researchers/bull_researcher.py",
-    "researchers/bear_researcher.py",
-    "managers/research_manager.py",
-    "managers/portfolio_manager.py",
-    "risk_mgmt/aggressive_debator.py",
-    "risk_mgmt/conservative_debator.py",
-    "risk_mgmt/neutral_debator.py",
-    "trader/trader.py",
 ]
 
 
@@ -45,15 +36,6 @@ class TestLanguageInstruction:
         out = get_language_instruction()
         assert "中文" in out
         assert "entire response" in out
-
-    def test_the_labelled_lines_stay_as_the_format_gives_them(self):
-        # The rating is read from its "**Rating**:" line; a translated label
-        # leaves the reader a translated negation ("不建议卖出 (Sell)") to find
-        # instead, and a Buy reads as Sell (#1435).
-        from tradingagents.dataflows.config import set_config
-        set_config({"output_language": "中文"})
-        out = get_language_instruction()
-        assert "**Rating**:" in out and "FINAL TRANSACTION PROPOSAL" in out
 
 
 @pytest.mark.unit

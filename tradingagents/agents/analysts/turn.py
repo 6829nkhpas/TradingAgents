@@ -10,6 +10,24 @@ WRAP_UP = (
 )
 
 
+def content_text(content) -> str:
+    """A message's content as plain text.
+
+    Some providers (OpenAI Responses API, Gemini 3) return a list of typed
+    blocks; only the text blocks are report text.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [
+            item.get("text", "") if isinstance(item, dict) and item.get("type") == "text"
+            else item if isinstance(item, str) else ""
+            for item in content
+        ]
+        return "\n".join(p for p in parts if p)
+    return "" if content is None else str(content)
+
+
 def take_turn(prompt, llm, tools, messages):
     """The analyst's reply and its report, which stays empty while it calls tools.
 
@@ -22,9 +40,9 @@ def take_turn(prompt, llm, tools, messages):
         # call may still try, and some providers then answer with nothing.
         prompt = prompt.partial(tool_names="none; your tool rounds are spent")
         result = (prompt | llm).invoke(_as_text(messages))
-        return result, result.content
+        return result, content_text(result.content)
     result = (prompt | llm.bind_tools(tools)).invoke(messages)
-    return result, "" if result.tool_calls else result.content
+    return result, "" if result.tool_calls else content_text(result.content)
 
 
 def _as_text(messages):

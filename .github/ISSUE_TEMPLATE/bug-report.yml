@@ -20,9 +20,8 @@ body:
     attributes:
       label: How you run it
       options:
-        - CLI (tradingagents)
-        - Python package (TradingAgentsGraph)
-        - Backtest (run_backtest or tradingagents backtest)
+        - Research API server (tradingagents-api)
+        - Python package (ResearchAnalyzer)
         - Docker
     validations:
       required: true
@@ -30,7 +29,7 @@ body:
     id: models
     attributes:
       label: LLM provider and models
-      placeholder: "openai, gpt-6-sol / gpt-6-luna"
+      placeholder: "openai, gpt-6-luna"
     validations:
       required: true
   - type: input

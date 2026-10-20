@@ -1,14 +1,10 @@
-"""Console entry point for serving the optional research API."""
+"""Console entry point for serving the research API (``tradingagents-api``)."""
 
 import os
 
 
 def main() -> None:
-    try:
-        import uvicorn
-    except ImportError as exc:
-        message = 'Install the API dependencies with `pip install "tradingagents[api]"`.'
-        raise SystemExit(message) from exc
+    import uvicorn
 
     host = os.getenv("TRADINGAGENTS_API_HOST", "0.0.0.0")
     port = int(os.getenv("TRADINGAGENTS_API_PORT", "8000"))

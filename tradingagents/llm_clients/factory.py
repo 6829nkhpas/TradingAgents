@@ -127,4 +127,23 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         key = "max_output_tokens" if provider == "google" else "max_tokens"
         kwargs[key] = _coerce_max_tokens(max_tokens)
 
+    # Per-request timeout, so a hung provider call cannot stall a run forever.
+    # Bedrock's client takes its timeouts from boto3, not a kwarg.
+    timeout = config.get("llm_timeout")
+    if timeout is not None and timeout != "" and provider != "bedrock":
+        kwargs["timeout"] = _coerce_timeout(timeout)
+
     return kwargs
+
+
+def _coerce_timeout(value) -> float:
+    """Validate an ``llm_timeout`` value to a positive number of seconds."""
+    if isinstance(value, bool):
+        raise ValueError(f"llm_timeout must be a number, not a boolean: {value!r}")
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"llm_timeout must be a number, got {value!r}") from exc
+    if seconds <= 0:
+        raise ValueError(f"llm_timeout must be > 0, got {seconds}")
+    return seconds

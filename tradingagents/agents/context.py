@@ -1,4 +1,4 @@
-"""Prompt context shared by the agents: instrument identity, output language and portfolio."""
+"""Prompt context shared by the analysts: instrument identity and output language."""
 
 import functools
 import logging
@@ -15,37 +15,14 @@ def get_language_instruction() -> str:
     """Return a prompt instruction for the configured output language.
 
     Returns empty string when English (default), so no extra tokens are used.
-    Applied to every agent whose output reaches the saved report —
-    analysts, researchers, debaters, research manager, trader, and
-    portfolio manager — so a non-English run produces a fully localized
+    Applied to every analyst so a non-English run produces a fully localized
     report rather than a mix of languages.
     """
     from tradingagents.dataflows.config import get_config
     lang = get_config().get("output_language", "English")
     if lang.strip().lower() == "english":
         return ""
-    # The labelled lines are read by the program, so they keep their English
-    # label and value: a translated rating line leaves the reader prose to
-    # search, where a negated rating ("not a Sell") reads as the call (#1435).
-    return (
-        f" Write your entire response in {lang}, except the labelled lines the format"
-        f" asks for (the \"**Rating**:\" line, \"FINAL TRANSACTION PROPOSAL:\"):"
-        f" keep their label and value in English, exactly as specified."
-    )
-
-
-def opponent_argument_or_opening(text: str, opponent: str) -> str:
-    """Opponent's latest argument, or an explicit opening marker when empty.
-
-    The first speaker in each debate round receives an empty opponent response;
-    interpolating it into a "refute the opponent" prompt makes the model
-    fabricate the other side's position. Returning a clear "has not spoken yet"
-    marker instead lets it open with its own case (#1176).
-    """
-    text = (text or "").strip()
-    if text:
-        return text
-    return f"(The {opponent} has not spoken yet — open the debate with your own case.)"
+    return f" Write your entire response in {lang}."
 
 
 def _clean_identity_value(value: Any) -> str | None:
@@ -163,8 +140,8 @@ def build_instrument_context(
 
     if is_crypto:
         context += (
-            " Treat it as a crypto asset rather than a company, and do not "
-            "assume company fundamentals are available."
+            " Treat it as a crypto asset rather than a company: its fundamentals are "
+            "supply, valuation and network activity, and it has no company financials."
         )
     return context
 
@@ -184,35 +161,4 @@ def get_instrument_context_from_state(state: Mapping[str, Any]) -> str:
     return build_instrument_context(
         str(state["company_of_interest"]),
         state.get("asset_type", "stock"),
-    )
-
-
-def report_or_absent(text: str, source: str) -> str:
-    """An analyst's report, or a marker saying it was never produced.
-
-    A report is empty when its analyst was not selected, refused, or returned
-    nothing. Interpolating that into a labelled section presents an absence as a
-    blank finding, and the reading agent fills it in from nothing, the same way
-    an empty opponent argument used to invite an invented rebuttal (#1176).
-    """
-    text = (text or "").strip()
-    if text:
-        return text
-    return f"(No {source} report in this run: it is not available, not an empty finding.)"
-
-
-def get_portfolio_context_from_state(state: Mapping[str, Any]) -> str:
-    """Return the caller's portfolio block, or a notice that none was given.
-
-    A run without portfolio context must not read as a flat book: the agents
-    would otherwise size as if the caller held nothing, which is a claim about
-    an account we were never told about.
-    """
-    context = state.get("portfolio_context")
-    if isinstance(context, str) and context.strip():
-        return context
-    return (
-        "Portfolio context: not provided. You do not know the caller's current "
-        "holdings or cash, so do not assume a flat book; give direction and "
-        "sizing guidance in terms the caller can apply to their own position."
     )

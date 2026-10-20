@@ -21,10 +21,7 @@ import pytest
 
 from tradingagents.dataflows import date_window
 from tradingagents.dataflows.vendors.alpha_vantage import fundamentals as av
-from tradingagents.dataflows.vendors.yahoo import (
-    fundamentals as yahoo_fundamentals,
-    market as yahoo_market,
-)
+from tradingagents.dataflows.vendors.yahoo import fundamentals as yahoo_fundamentals
 
 _TODAY = "2026-09-07"
 _PAST = "2024-05-10"
@@ -36,19 +33,18 @@ _INFO = {
     "industry": "Consumer Electronics",
     "marketCap": 3_500_000_000_000,
     "trailingPE": 34.2,
-    "fiftyTwoWeekHigh": 260.1,
     "totalRevenue": 391_000_000_000,
 }
 
 # Values that must never reach a historical run.
-_LEAKY = ("3500000000000", "34.2", "260.1", "391000000000",
+_LEAKY = ("3500000000000", "34.2", "391000000000",
           "Apple Inc.", "Technology", "Consumer Electronics")
 
 
 def _yf(as_of_date, info=_INFO, today=_TODAY):
     with mock.patch.object(date_window, "get_current_date", return_value=today), \
          mock.patch.object(yahoo_fundamentals, "yf_retry", lambda fn: info), \
-         mock.patch.object(yahoo_market.yf, "Ticker"):
+         mock.patch.object(yahoo_fundamentals.yf, "Ticker"):
         return yahoo_fundamentals.get_fundamentals("AAPL", as_of_date)
 
 
@@ -83,7 +79,7 @@ class TestYFinanceHistoricalRun:
         # The response would only be discarded; skipping it also avoids burning
         # vendor quota on a call whose result cannot be used.
         with mock.patch.object(date_window, "get_current_date", return_value=_TODAY), \
-             mock.patch.object(yahoo_market.yf, "Ticker") as tk:
+             mock.patch.object(yahoo_fundamentals.yf, "Ticker") as tk:
             yahoo_fundamentals.get_fundamentals("AAPL", _PAST)
         tk.assert_not_called()
 
@@ -121,6 +117,13 @@ class TestLiveRunUnchanged:
         out = _yf(None)
         assert "Market Cap: 3500000000000" in out
         assert "withheld" not in out
+
+    def test_price_statistics_are_not_served_as_fundamentals(self):
+        info = {**_INFO, "fiftyTwoWeekHigh": 260.1, "fiftyTwoWeekLow": 164.1,
+                "fiftyDayAverage": 222.2, "twoHundredDayAverage": 211.1}
+        out = _yf(_TODAY, info=info)
+        for price_stat in ("260.1", "164.1", "222.2", "211.1", "52 Week", "Day Average"):
+            assert price_stat not in out
 
 
 @pytest.mark.unit

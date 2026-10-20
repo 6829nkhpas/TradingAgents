@@ -39,6 +39,9 @@ class TestStockTwitsResilience:
             HTTPError("url", 503, "down", {}, None),
             TimeoutError("slow"),
         ],
+        # Explicit ids: deriving one from an HTTPError with no body reads
+        # its tempfile wrapper, which raises on some Python 3.11 patch releases.
+        ids=["incomplete-read", "http-503", "timeout"],
     )
     def test_transport_errors_return_placeholder(self, exc):
         with patch.object(stocktwits, "urlopen", return_value=_raise(exc)):

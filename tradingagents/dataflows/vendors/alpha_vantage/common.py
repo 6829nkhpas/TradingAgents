@@ -1,9 +1,6 @@
 import json
 import os
 from datetime import datetime
-from io import StringIO
-
-import pandas as pd
 
 from tradingagents.dataflows.errors import VendorNotConfiguredError, VendorUnavailableError
 from tradingagents.dataflows.net import get_scrubbed
@@ -11,7 +8,7 @@ from tradingagents.dataflows.net import get_scrubbed
 API_BASE_URL = "https://www.alphavantage.co/query"
 
 # Network timeout (seconds) so a stalled Alpha Vantage request can't hang the
-# CLI/agents indefinitely (#990).
+# analysts indefinitely (#990).
 REQUEST_TIMEOUT = 30
 
 
@@ -121,34 +118,3 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
 
     return response_text
 
-
-def _filter_csv_by_date_range(csv_data: str, start_date: str, end_date: str) -> str:
-    """
-    Filter CSV data to include only rows within the specified date range.
-
-    Args:
-        csv_data: CSV string from Alpha Vantage API
-        start_date: Start date in yyyy-mm-dd format
-        end_date: End date in yyyy-mm-dd format
-
-    Returns:
-        Filtered CSV string
-    """
-    if not csv_data or csv_data.strip() == "":
-        return csv_data
-
-    # Deliberately unguarded: TIME_SERIES_DAILY_ADJUSTED returns the full series
-    # up to today, so this trim is the only thing keeping bars after end_date out
-    # of a historical run. Swallowing a parse failure would serve the untrimmed
-    # body, and with it future prices.
-    df = pd.read_csv(StringIO(csv_data))
-
-    # Assume the first column is the date column (timestamp)
-    date_col = df.columns[0]
-    df[date_col] = pd.to_datetime(df[date_col])
-
-    start_dt = pd.to_datetime(start_date)
-    end_dt = pd.to_datetime(end_date)
-    filtered_df = df[(df[date_col] >= start_dt) & (df[date_col] <= end_dt)]
-
-    return filtered_df.to_csv(index=False)

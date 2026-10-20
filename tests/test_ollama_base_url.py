@@ -1,21 +1,8 @@
-"""Tests for OLLAMA_BASE_URL env-var override across CLI and client paths."""
+"""Tests for the OLLAMA_BASE_URL env-var override in the client path."""
 
 from __future__ import annotations
 
-import re
-
 import pytest
-
-# Rich colorizes console output and highlights numbers and URLs, which splits
-# asserted substrings with escape codes ("port \x1b[1;33m11434"). Whether it
-# does so depends on the ambient terminal, so strip the codes to keep these
-# assertions independent of where the suite runs.
-_ANSI = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _console_out(capsys) -> str:
-    return _ANSI.sub("", capsys.readouterr().out)
-
 
 # ---- openai_client side: registry-driven base_url resolution --------------
 
@@ -78,56 +65,6 @@ def test_explicit_base_url_overrides_env(monkeypatch):
     llm = client.get_llm()
     assert "explicit" in str(llm.openai_api_base)
     assert "env-set" not in str(llm.openai_api_base)
-
-
-# ---- confirm_ollama_endpoint UX -------------------------------------------
-
-
-def test_confirm_endpoint_shows_default(monkeypatch, capsys):
-    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
-    from cli import prompts
-    prompts.confirm_ollama_endpoint("http://localhost:11434/v1")
-    out = _console_out(capsys)
-    assert "http://localhost:11434/v1" in out
-    assert "OLLAMA_BASE_URL" not in out  # not from env
-    assert "Note" not in out  # no warnings for the canonical default
-
-
-def test_confirm_endpoint_marks_env_origin(monkeypatch, capsys):
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://remote-host:11434/v1")
-    from cli import prompts
-    prompts.confirm_ollama_endpoint("http://remote-host:11434/v1")
-    out = _console_out(capsys)
-    assert "http://remote-host:11434/v1" in out
-    assert "OLLAMA_BASE_URL" in out
-
-
-def test_confirm_endpoint_warns_on_missing_scheme(monkeypatch, capsys):
-    """If user sets OLLAMA_BASE_URL=0.0.0.128, advise on the expected shape."""
-    monkeypatch.setenv("OLLAMA_BASE_URL", "0.0.0.128")
-    from cli import prompts
-    prompts.confirm_ollama_endpoint("0.0.0.128")
-    out = _console_out(capsys)
-    assert "missing a scheme" in out
-    assert "http://<host>:11434/v1" in out
-
-
-def test_confirm_endpoint_warns_on_non_default_port_remote(monkeypatch, capsys):
-    """A remote host with no :11434 gets a soft hint about port mismatch."""
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://remote-host/v1")
-    from cli import prompts
-    prompts.confirm_ollama_endpoint("http://remote-host/v1")
-    out = _console_out(capsys)
-    assert "port 11434" in out
-
-
-def test_confirm_endpoint_quiet_on_local_no_port(monkeypatch, capsys):
-    """Local host without port shouldn't trigger the remote-port hint."""
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost/v1")
-    from cli import prompts
-    prompts.confirm_ollama_endpoint("http://localhost/v1")
-    out = _console_out(capsys)
-    assert "Note" not in out  # localhost is fine without explicit port
 
 
 def test_ollama_model_labels_no_local_suffix():

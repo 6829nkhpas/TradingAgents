@@ -15,14 +15,15 @@ from datetime import UTC, datetime
 
 import requests
 
+from tradingagents.dataflows import evidence
 from tradingagents.dataflows.date_window import is_historical
 
 logger = logging.getLogger(__name__)
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 
-# Network timeout (seconds), consistent with the other vendors.
-REQUEST_TIMEOUT = 30
+# Network timeout (seconds), set to 5s so unreachable endpoints fail fast.
+REQUEST_TIMEOUT = 5
 
 # Default number of markets to return, ranked by traded volume.
 DEFAULT_LIMIT = 6
@@ -103,7 +104,8 @@ def get_prediction_markets(topic: str, limit: int | None = None, as_of_date: str
 
     now = datetime.now(UTC)
     candidates = [
-        m
+        # Carry the event's slug onto its market: the event page is the link.
+        {**m, "_event_slug": event.get("slug")}
         for event in data.get("events", [])
         for m in event.get("markets", [])
         if _is_forward_looking(m, now)
@@ -144,6 +146,13 @@ def get_prediction_markets(topic: str, limit: int | None = None, as_of_date: str
         lines.append(
             f"- **{m.get('question')}** — {label} {prob:.0%} "
             f"(${volume:,.0f} volume, resolves {end_date}{wk_str})"
+        )
+        slug = m.get("_event_slug")
+        evidence.record(
+            type="prediction_market",
+            title=f"{m.get('question')} — {label} {prob:.0%}",
+            source="Polymarket",
+            url=f"https://polymarket.com/event/{slug}" if slug else None,
         )
 
     return header + "\n".join(lines) + "\n"

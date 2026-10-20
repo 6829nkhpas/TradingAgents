@@ -1,4 +1,4 @@
-"""TradingAgents: multi-agent LLM financial trading framework."""
+"""TradingAgents Research API: sentiment, news and fundamentals convictions for stocks and crypto."""
 
 __version__ = "0.5.2"
 

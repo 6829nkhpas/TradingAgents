@@ -6,10 +6,24 @@ from datetime import UTC, datetime
 import yfinance as yf
 from dateutil.relativedelta import relativedelta
 
+from tradingagents.dataflows import evidence
 from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.date_window import coverage_gap, in_window
 from tradingagents.dataflows.symbols import normalize_symbol
 from tradingagents.dataflows.vendors.yahoo.common import yf_retry
+
+
+def _record_article(data: dict) -> None:
+    """Record one served article as evidence for the analyst in scope."""
+    if not data.get("title") or data["title"] == "No title":
+        return
+    evidence.record(
+        type="article",
+        title=data["title"],
+        source=data.get("publisher") or "Yahoo Finance",
+        url=data.get("link"),
+        published_at=data.get("pub_date"),
+    )
 
 
 def _extract_article_data(article: dict) -> dict:
@@ -81,6 +95,34 @@ def get_news_yfinance(
     resolved = "" if canonical == ticker else f" (resolved to {canonical})"
     news = yf_retry(lambda: yf.Ticker(canonical).get_news(count=article_limit)) or []
 
+    # Yahoo Ticker.get_news() returns empty for crypto pairs (and certain equities).
+    # Fall back to yf.Search with the token/ecosystem name or search keyword.
+    if not news:
+        from tradingagents.dataflows.symbols import crypto_base, looks_like_crypto_symbol
+        _CRYPTO_SEARCH_KEYWORDS = {
+            "BNB": "Binance",
+            "BTC": "Bitcoin",
+            "ETH": "Ethereum",
+            "SOL": "Solana",
+            "XRP": "Ripple",
+            "ADA": "Cardano",
+            "DOGE": "Dogecoin",
+            "LTC": "Litecoin",
+            "BCH": "Bitcoin Cash",
+            "DOT": "Polkadot",
+            "AVAX": "Avalanche",
+            "LINK": "Chainlink",
+        }
+        base = crypto_base(ticker) or (ticker.split("-")[0] if "-" in ticker else ticker).upper().replace("USDT", "")
+        keyword = _CRYPTO_SEARCH_KEYWORDS.get(base)
+        if not keyword and (looks_like_crypto_symbol(ticker) or crypto_base(ticker)):
+            keyword = f"{base} crypto"
+        if not keyword:
+            keyword = ticker
+
+        search_res = yf_retry(lambda k=keyword: getattr(yf.Search(k), "news", [])) or []
+        news = search_res[:article_limit]
+
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
@@ -101,6 +143,7 @@ def get_news_yfinance(
             news_str += f"Link: {data['link']}\n"
         news_str += "\n"
         filtered_count += 1
+        _record_article(data)
 
     if filtered_count == 0:
         gap = coverage_gap(
@@ -175,6 +218,7 @@ def get_global_news_yfinance(
         if data["link"]:
             news_str += f"Link: {data['link']}\n"
         news_str += "\n"
+        _record_article(data)
 
     # Nothing fell inside the window -> say so rather than return an
     # empty-bodied report (#993).

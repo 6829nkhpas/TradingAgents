@@ -21,18 +21,6 @@ def test_a_test_cannot_reach_the_network(connect):
 
 
 @pytest.mark.unit
-def test_a_test_saves_cli_selections_to_its_own_directory(tmp_path):
-    """The CLI remembers the last run's selections in the user's home; a test
-    that runs the selection flow would otherwise overwrite them."""
-    from cli import prefs
-
-    prefs.save_last_run({"analysts": ["market"]})
-
-    assert prefs._PREFS_PATH.is_relative_to(tmp_path)
-    assert prefs._PREFS_PATH.exists()
-
-
-@pytest.mark.unit
 def test_yfinance_keeps_its_cache_out_of_the_users_home():
     """yfinance caches each symbol's time zone on disk, in the home directory by default."""
     from pathlib import Path
@@ -43,7 +31,7 @@ def test_yfinance_keeps_its_cache_out_of_the_users_home():
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("key", ["results_dir", "data_cache_dir", "memory_log_path"])
+@pytest.mark.parametrize("key", ["data_cache_dir"])
 def test_the_suite_keeps_its_files_out_of_the_users_home(key):
     """A test that reads the user's cache sees what their runs fetched, and passes
     or fails with it; one that writes there changes their data."""

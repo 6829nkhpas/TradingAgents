@@ -16,10 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import tradingagents.agents.analysts.sentiment_analyst as sentiment
-from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
-from tradingagents.agents.managers.research_manager import create_research_manager
 from tradingagents.agents.structured import NO_EXTERNAL_TOOLS
-from tradingagents.agents.trader.trader import create_trader
 
 
 def _capturing_llm(captured: dict, result):
@@ -41,69 +38,6 @@ def _prompt_text(prompt) -> str:
     for m in prompt:
         parts.append(m.get("content", "") if isinstance(m, dict) else getattr(m, "content", ""))
     return "\n".join(str(p) for p in parts)
-
-
-@pytest.mark.unit
-def test_trader_prompt_states_constraint():
-    from tradingagents.agents.schemas import TraderAction, TraderProposal
-
-    captured = {}
-    llm = _capturing_llm(captured, TraderProposal(action=TraderAction.BUY, reasoning="x"))
-    create_trader(llm)({
-        "company_of_interest": "NVDA",
-        "investment_plan": "**Recommendation**: Buy",
-        "market_report": "Current price $189.5; ATR 4.2.",
-    })
-    assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
-
-
-@pytest.mark.unit
-def test_research_manager_prompt_states_constraint():
-    from tradingagents.agents.schemas import PortfolioRating, ResearchPlan
-
-    captured = {}
-    llm = _capturing_llm(
-        captured,
-        ResearchPlan(
-            recommendation=PortfolioRating.BUY, rationale="x", strategic_actions="y"
-        ),
-    )
-    create_research_manager(llm)({
-        "company_of_interest": "NVDA",
-        "investment_debate_state": {
-            "history": "h", "bull_history": "b", "bear_history": "r",
-            "current_response": "", "count": 1,
-        },
-    })
-    assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
-
-
-@pytest.mark.unit
-def test_portfolio_manager_prompt_states_constraint():
-    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
-
-    captured = {}
-    llm = _capturing_llm(
-        captured,
-        PortfolioDecision(
-            rating=PortfolioRating.HOLD,
-            executive_summary="x",
-            investment_thesis="y",
-        ),
-    )
-    risk = {
-        "history": "h", "aggressive_history": "a", "conservative_history": "c",
-        "neutral_history": "n", "current_aggressive_response": "",
-        "current_conservative_response": "", "current_neutral_response": "",
-        "latest_speaker": "Neutral", "count": 1,
-    }
-    create_portfolio_manager(llm)({
-        "company_of_interest": "NVDA",
-        "risk_debate_state": risk,
-        "investment_plan": "plan",
-        "trader_investment_plan": "trader plan",
-    })
-    assert NO_EXTERNAL_TOOLS in _prompt_text(captured["prompt"])
 
 
 @pytest.mark.unit
@@ -134,9 +68,9 @@ def test_sentiment_prompt_states_constraint(monkeypatch):
 def test_tool_using_analysts_keep_their_date_guidance():
     # The analysts that really do call tools keep the wording that anchors their
     # tool date ranges (#836) — this fix is scoped to no-tool agents.
-    import tradingagents.agents.analysts.market_analyst as market
+    import tradingagents.agents.analysts.fundamentals_analyst as fundamentals
     import tradingagents.agents.analysts.news_analyst as news
-    for module in (market, news):
+    for module in (fundamentals, news):
         assert "tool-call date ranges" in inspect.getsource(module)
 
 

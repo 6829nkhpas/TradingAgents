@@ -1,3 +1,5 @@
+import contextlib
+from datetime import UTC, datetime
 from typing import Annotated
 
 import yfinance as yf
@@ -56,10 +58,6 @@ def get_fundamentals(
         ("Forward EPS", info.get("forwardEps")),
         ("Dividend Yield", None if dividend_yield is None else f"{dividend_yield}%"),
         ("Beta", info.get("beta")),
-        ("52 Week High", info.get("fiftyTwoWeekHigh")),
-        ("52 Week Low", info.get("fiftyTwoWeekLow")),
-        ("50 Day Average", info.get("fiftyDayAverage")),
-        ("200 Day Average", info.get("twoHundredDayAverage")),
         ("Revenue (TTM)", info.get("totalRevenue")),
         ("Gross Profit", info.get("grossProfits")),
         ("EBITDA", info.get("ebitda")),
@@ -152,3 +150,49 @@ def get_insider_transactions(
 def get_company_profile(ticker: str) -> dict:
     """Yahoo's current profile for ``ticker``: name, sector, industry and the like."""
     return yf_retry(lambda: yf.Ticker(normalize_symbol(ticker)).info) or {}
+
+
+_DESCRIPTION_CHARS = 600
+
+
+def get_crypto_profile(ticker: str, as_of_date: str | None = None) -> str:
+    """Yahoo's current profile of a crypto asset: size, supply and liquidity.
+
+    Deliberately no price statistics (52-week range, moving averages, changes):
+    this feeds a fundamentals read, not a technical one. A past ``as_of_date``
+    withholds the live snapshot like every other profile (#1300).
+    """
+    canonical = normalize_symbol(ticker)
+    withheld = withhold_live_profile(as_of_date, canonical)
+    if withheld:
+        return withheld
+
+    info = yf_retry(lambda: yf.Ticker(canonical).info)
+    if not info:
+        raise_for_empty(ticker, canonical, "crypto profile")
+
+    start = info.get("startDate")
+    started = None
+    if isinstance(start, (int, float)):
+        with contextlib.suppress(OverflowError, OSError, ValueError):
+            started = datetime.fromtimestamp(start, tz=UTC).date().isoformat()
+    description = (info.get("description") or "").strip()
+    if len(description) > _DESCRIPTION_CHARS:
+        description = description[:_DESCRIPTION_CHARS].rstrip() + "…"
+
+    fields = [
+        ("Name", info.get("longName") or info.get("shortName") or info.get("name")),
+        ("Quote Type", info.get("quoteType")),
+        ("Market Cap (USD)", info.get("marketCap")),
+        ("Circulating Supply", info.get("circulatingSupply")),
+        ("Total Supply", info.get("totalSupply")),
+        ("Max Supply", info.get("maxSupply")),
+        ("24h Volume (USD)", info.get("volume24Hr")),
+        ("24h Volume, all currencies", info.get("volumeAllCurrencies")),
+        ("Trading Since", started),
+        ("Description", description or None),
+    ]
+    lines = [f"{label}: {v}" for label, v in fields if v not in (None, "")]
+    if not lines:
+        raise_for_empty(ticker, canonical, "crypto profile fields")
+    return f"# Yahoo Finance crypto profile for {canonical}\n\n" + "\n".join(lines)

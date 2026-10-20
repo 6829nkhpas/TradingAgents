@@ -1,11 +1,13 @@
-"""Research-only analysis service backed by the project's analyst agents.
+"""Research service: sentiment, news and fundamentals convictions for one instrument.
 
-This service deliberately does not create the bull/bear debate, trader, risk
-team, portfolio manager, memory log, or trade-decision pipeline.
+Runs the three analysts in parallel, scores each report into a structured
+conviction, and combines those into one overall conviction. It does not make or
+execute trades, and it does no technical (price/indicator) analysis.
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from copy import deepcopy
 from datetime import UTC, date, datetime
@@ -14,25 +16,32 @@ from typing import Any
 from tradingagents.agents.context import build_instrument_context, resolve_instrument_identity
 from tradingagents.dataflows.config import run_config
 from tradingagents.dataflows.date_window import get_current_date
+from tradingagents.dataflows.evidence import collecting
 from tradingagents.dataflows.router import VENDOR_METHODS, get_category_for_method
 from tradingagents.dataflows.symbols import (
+    crypto_base,
     looks_like_crypto_symbol,
     normalize_crypto_symbol,
     normalize_symbol,
     safe_ticker_component,
 )
 from tradingagents.default_config import DEFAULT_CONFIG
-from tradingagents.graph.setup import GraphSetup
+from tradingagents.graph.analyst_execution import build_analyst_execution_plan
+from tradingagents.graph.setup import CRYPTO_ANALYSTS, STOCK_ANALYSTS, GraphSetup
 from tradingagents.llm_clients import build_llm_kwargs, create_llm_client
+from tradingagents.overall import NoConvictionError, compute_overall
+from tradingagents.research_store import ResearchStore
 
-DEFAULT_ANALYSTS = ("market", "social", "news", "fundamentals")
-CRYPTO_ANALYSTS = ("market", "social", "news")
-REPORT_KEYS = {
-    "market": "market_report",
-    "sentiment": "sentiment_report",
-    "news": "news_report",
-    "fundamentals": "fundamentals_report",
-}
+logger = logging.getLogger(__name__)
+
+ANALYSTS_BY_ASSET_TYPE = {"stock": STOCK_ANALYSTS, "crypto": CRYPTO_ANALYSTS}
+DISCLAIMER = "Research and analytics only; not financial or investment advice."
+BASE_NOTICE = "Configured sources may be unavailable or rate-limited; see each report for data gaps."
+CRYPTO_NOTICE = (
+    "Crypto fundamentals cover supply, valuation and network activity from CoinGecko and "
+    "Yahoo Finance; there are no company financials or on-chain analytics."
+)
+NO_OVERALL_NOTICE = "Overall conviction unavailable: no analyst report could be scored."
 
 _VENDOR_LABELS = {
     "alpha_vantage": "Alpha Vantage",
@@ -45,6 +54,10 @@ _VENDOR_LABELS = {
 
 class InvalidResearchRequest(ValueError):
     """The requested instrument or as-of date is not valid for analysis."""
+
+
+class ResearchUnavailable(RuntimeError):
+    """No analyst produced a report; the message is safe to show to callers."""
 
 
 def normalize_research_instrument(
@@ -138,13 +151,7 @@ def _configured_vendors(config: dict[str, Any], methods: tuple[str, ...]) -> lis
 def configured_research_sources(
     config: dict[str, Any], *, asset_type: str
 ) -> dict[str, list[str]]:
-    """Describe the configured platforms behind each research report."""
-    market = _configured_vendors(config, ("get_stock_data", "get_indicators"))
-    # The market analyst also calls the deterministic snapshot, which currently
-    # uses Yahoo Finance directly even when a different primary vendor is set.
-    if "Yahoo Finance" not in market:
-        market.append("Yahoo Finance")
-
+    """Describe the configured platforms behind each analyst's report."""
     sentiment = _configured_vendors(config, ("get_news",)) + ["StockTwits", "Reddit"]
     if os.getenv("TYPESAFE_API_KEY"):
         sentiment.append("TypeSafe Jev (optional post screening)")
@@ -153,27 +160,68 @@ def configured_research_sources(
         config,
         ("get_news", "get_global_news", "get_macro_indicators", "get_prediction_markets"),
     )
-    fundamentals = _configured_vendors(
-        config,
-        (
-            "get_fundamentals",
-            "get_balance_sheet",
-            "get_cashflow",
-            "get_income_statement",
-            "get_insider_transactions",
-        ),
-    )
+    if asset_type == "crypto":
+        fundamentals = ["CoinGecko", "Yahoo Finance"]
+    else:
+        fundamentals = _configured_vendors(
+            config,
+            (
+                "get_fundamentals",
+                "get_balance_sheet",
+                "get_cashflow",
+                "get_income_statement",
+                "get_insider_transactions",
+            ),
+        )
 
     return {
-        "market": market,
         "sentiment": list(dict.fromkeys(sentiment)),
         "news": news,
-        "fundamentals": fundamentals if asset_type == "stock" else [],
+        "fundamentals": fundamentals,
     }
 
 
+def _clean_report(value: Any) -> str:
+    """A report as stripped text; empty when the analyst produced none."""
+    if isinstance(value, list):
+        value = "\n".join(
+            block.get("text", "") if isinstance(block, dict) else str(block) for block in value
+        )
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _analyst_result(
+    *,
+    report: str,
+    conviction: dict,
+    error: str | None,
+    sources: list[str],
+    evidence_items: list[dict],
+    label: str,
+) -> dict[str, Any]:
+    """One analyst's API section. Fields that do not apply are left out, never null."""
+    if not report:
+        result: dict[str, Any] = {
+            "status": "unavailable",
+            "reason": error or f"The {label} produced no report.",
+        }
+    elif not conviction:
+        result = {
+            "status": "degraded",
+            "reason": "The report could not be scored into a conviction.",
+            "report": report,
+        }
+    else:
+        result = {"status": "ok", "conviction": conviction, "report": report}
+    if evidence_items and report:
+        result["evidence"] = evidence_items
+    if sources:
+        result["sources"] = sources
+    return result
+
+
 class ResearchAnalyzer:
-    """Run market, news, sentiment and (for stocks) fundamentals analysis."""
+    """Run the sentiment, news and fundamentals analysts and combine their convictions."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         self.config = _merge_config(config)
@@ -188,22 +236,30 @@ class ResearchAnalyzer:
 
         max_tool_rounds = int(self.config["max_tool_rounds"])
         max_recur_limit = int(self.config["max_recur_limit"])
-        if 2 * max_tool_rounds + 2 >= max_recur_limit:
+        # A tool analyst takes two steps a round, plus its report, wrap-up and score.
+        if 2 * max_tool_rounds + 4 >= max_recur_limit:
             raise ValueError(
                 f"max_tool_rounds={max_tool_rounds} needs max_recur_limit "
-                f"above {2 * max_tool_rounds + 2}"
+                f"above {2 * max_tool_rounds + 4}"
             )
 
-        graph_setup = GraphSetup(
-            self.llm,
-            self.llm,
-            conditional_logic=None,
-            max_tool_rounds=max_tool_rounds,
-        )
+        graph_setup = GraphSetup(self.llm, max_tool_rounds=max_tool_rounds)
         self.graphs = {
-            "stock": graph_setup.setup_research_graph(DEFAULT_ANALYSTS).compile(),
-            "crypto": graph_setup.setup_research_graph(CRYPTO_ANALYSTS).compile(),
+            asset_type: graph_setup.setup_research_graph(analysts).compile()
+            for asset_type, analysts in ANALYSTS_BY_ASSET_TYPE.items()
         }
+        self.store = ResearchStore(
+            max_concurrent=int(self.config.get("max_concurrent_runs") or 1),
+            path=self._store_path(),
+            min_refresh_age=float(self.config.get("research_refresh_min_age_seconds") or 0),
+        )
+
+    def _store_path(self) -> str | None:
+        if not self.config.get("research_persist_results"):
+            return None
+        return self.config.get("research_store_path") or os.path.join(
+            self.config["data_cache_dir"], "research_results.json"
+        )
 
     def analyze(
         self,
@@ -212,67 +268,115 @@ class ResearchAnalyzer:
         asset_type: str | None = None,
         analysis_date: date | str | None = None,
     ) -> dict[str, Any]:
-        """Return a JSON-friendly research result for one ticker or crypto asset."""
+        """Return a JSON-friendly research result for one ticker or crypto asset.
+
+        Each symbol keeps its latest result. A request for a symbol that has one
+        is answered from it at once (``cached: true``) and queues a fresh run in
+        the background (``refreshing: true``), which replaces the stored result
+        when it finishes. Only a symbol never researched before waits for a run.
+
+        A request for today (the default) shares the symbol's latest result
+        whatever day it was computed; its ``analysis_date`` says which. A past
+        ``analysis_date`` is its own entry, computed once and not refreshed.
+        """
         ticker, resolved_asset_type = normalize_research_instrument(symbol, asset_type)
         as_of_date = _canonical_analysis_date(analysis_date)
-        identity = resolve_instrument_identity(ticker) if resolved_asset_type == "stock" else {}
-        instrument_context = build_instrument_context(
-            ticker,
-            resolved_asset_type,
-            identity,
-            as_of_date,
-        )
-        initial_state = {
+        latest = as_of_date == get_current_date()
+        if latest:
+            key = (ticker, resolved_asset_type, "latest")
+
+            def compute() -> dict[str, Any]:
+                # Dated when the run starts, so a refresh tomorrow researches tomorrow.
+                return self._run(ticker, resolved_asset_type, _canonical_analysis_date(None))
+        else:
+            key = (ticker, resolved_asset_type, as_of_date)
+
+            def compute() -> dict[str, Any]:
+                return self._run(ticker, resolved_asset_type, as_of_date)
+
+        hit = self.store.get(key, compute, refresh=latest)
+        result = hit.value
+        result["cached"] = hit.cached
+        result["refreshing"] = hit.refreshing
+        return result
+
+    def _run_config(self, asset_type: str) -> dict[str, Any]:
+        config = deepcopy(self.config)
+        if asset_type == "crypto" and config.get("crypto_global_news_queries"):
+            config["global_news_queries"] = list(config["crypto_global_news_queries"])
+        return config
+
+    def _run(self, ticker: str, asset_type: str, as_of_date: str) -> dict[str, Any]:
+        identity = resolve_instrument_identity(ticker) if asset_type == "stock" else {}
+        instrument_context = build_instrument_context(ticker, asset_type, identity, as_of_date)
+        specs = build_analyst_execution_plan(ANALYSTS_BY_ASSET_TYPE[asset_type]).specs
+        initial_state: dict[str, Any] = {
             "messages": [("human", f"Research {ticker} as of {as_of_date}")],
             "company_of_interest": ticker,
-            "asset_type": resolved_asset_type,
+            "asset_type": asset_type,
             "instrument_context": instrument_context,
             "trade_date": as_of_date,
-            "market_report": "",
-            "sentiment_report": "",
-            "news_report": "",
-            "fundamentals_report": "",
+            "analyst_errors": {},
         }
+        for spec in specs:
+            initial_state[spec.report_key] = ""
+            initial_state[spec.conviction_key] = {}
 
+        run_cfg = self._run_config(asset_type)
         # Data tools read their vendors/configuration from a context-local copy,
-        # so simultaneous API requests do not overwrite one another's settings.
-        with run_config(self.config):
-            state = self.graphs[resolved_asset_type].invoke(
+        # so simultaneous API requests do not overwrite one another's settings;
+        # the evidence collector is context-local the same way.
+        with run_config(run_cfg), collecting() as collector:
+            state = self.graphs[asset_type].invoke(
                 initial_state,
                 config={"recursion_limit": int(self.config["max_recur_limit"])},
             )
 
-        reports = {
-            report_name: _clean_report(state.get(state_key))
-            for report_name, state_key in REPORT_KEYS.items()
-        }
-        notices = [
-            "Configured sources may be unavailable or rate-limited; see each report for data gaps."
-        ]
-        if resolved_asset_type == "crypto":
-            notices.append(
-                "Issuer/company fundamentals are omitted for crypto; this version does not "
-                "provide on-chain analytics."
+        errors = state.get("analyst_errors") or {}
+        sources = configured_research_sources(run_cfg, asset_type=asset_type)
+        analysts: dict[str, Any] = {}
+        convictions: dict[str, dict] = {}
+        for spec in specs:
+            report = _clean_report(state.get(spec.report_key))
+            conviction = state.get(spec.conviction_key) or {}
+            analysts[spec.name] = _analyst_result(
+                report=report,
+                conviction=conviction,
+                error=errors.get(spec.name),
+                sources=sources.get(spec.name, []),
+                evidence_items=collector.items_for(spec.name),
+                label=spec.agent_node,
             )
+            if report and conviction:
+                convictions[spec.name] = conviction
 
-        return {
+        if all(a["status"] == "unavailable" for a in analysts.values()):
+            reasons = "; ".join(a["reason"] for a in analysts.values())
+            raise ResearchUnavailable(f"No analyst produced a report for {ticker}: {reasons}")
+
+        notices = [BASE_NOTICE]
+        if asset_type == "crypto":
+            notices.append(CRYPTO_NOTICE)
+        notices.extend(collector.notices)
+
+        result: dict[str, Any] = {
             "symbol": ticker,
-            "asset_type": resolved_asset_type,
+            "asset_type": asset_type,
             "analysis_date": as_of_date,
-            "generated_at": datetime.now(UTC),
-            "research": reports,
-            "configured_sources": configured_research_sources(
-                self.config,
-                asset_type=resolved_asset_type,
-            ),
+            # A string, so the stored result is plain JSON and survives a restart unchanged.
+            "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "cached": False,
+            "refreshing": False,
+            "analysts": analysts,
             "notices": notices,
-            "disclaimer": "Research and analytics only; not financial or investment advice.",
+            "disclaimer": DISCLAIMER,
         }
-
-
-def _clean_report(value: Any) -> str | None:
-    """Return a non-empty report string or None when that section was not run."""
-    if not isinstance(value, str):
-        return None
-    report = value.strip()
-    return report or None
+        if asset_type == "crypto":
+            base = crypto_base(ticker, any_base=True)
+            if base:
+                result["base_asset"] = base
+        try:
+            result["overall"] = compute_overall(convictions, self.config.get("conviction_weights"))
+        except NoConvictionError:
+            notices.append(NO_OVERALL_NOTICE)
+        return result

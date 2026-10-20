@@ -41,7 +41,7 @@ _FOREX_CURRENCIES = frozenset(
 
 # Crypto bases that brokers quote against USD without a separator.
 _CRYPTO_BASES = frozenset(
-    {"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "LTC", "BCH", "DOT", "AVAX", "LINK"}
+    {"BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "LTC", "BCH", "DOT", "AVAX", "LINK", "BNB"}
 )
 _CRYPTO_NAME_ALIASES = {
     "BITCOIN": "BTC",
@@ -56,6 +56,9 @@ _CRYPTO_NAME_ALIASES = {
     "POLKADOT": "DOT",
     "AVALANCHE": "AVAX",
     "CHAINLINK": "LINK",
+    "BNB": "BNB",
+    "BINANCE": "BNB",
+    "BINANCECOIN": "BNB",
 }
 
 # Explicit aliases for instruments whose broker symbol does not map to a
@@ -63,6 +66,9 @@ _CRYPTO_NAME_ALIASES = {
 # index CFD names resolve to the underlying Yahoo index symbol. Extend by
 # adding rows — no call site changes required.
 _ALIASES = {
+    "BNB": "BNB-USD",
+    "BNBUSDT": "BNB-USD",
+    "BNBUSD": "BNB-USD",
     # Precious metals (spot names -> COMEX/NYMEX futures)
     "XAUUSD": "GC=F", "XAU": "GC=F", "GOLD": "GC=F",
     "XAGUSD": "SI=F", "XAG": "SI=F", "SILVER": "SI=F",
@@ -93,18 +99,29 @@ _SHANGHAI_SH = re.compile(r"^(\d{6})\.SH$")
 _CRYPTO_QUOTES = ("USDT", "USDC", "USD")
 
 
-def crypto_base(raw: str) -> str | None:
+_ANY_CRYPTO_BASE = re.compile(r"^[A-Z0-9]{1,15}$")
+
+
+def crypto_base(raw: str, *, any_base: bool = False) -> str | None:
     """Return the crypto base (e.g. ``BTC``) for a known USD/USDT/USDC-quoted
     crypto symbol in any form the pipeline may hold — ``BTC-USD``, ``BTCUSD``,
     ``BTC-USDT`` — or None for non-crypto symbols. Purely syntactic.
+
+    ``any_base`` is for a caller that already knows the instrument is crypto
+    (the research API's ``asset_type="crypto"``): any quoted base is accepted,
+    so a long-tail coin such as ``SHIB-USD`` maps to ``SHIB`` instead of None.
     """
     if not isinstance(raw, str):
         return None
-    compact = raw.strip().upper().rstrip("+").replace("-", "")
+    compact = raw.strip().upper().rstrip("+").replace("-", "").replace("/", "")
     for quote in _CRYPTO_QUOTES:
         if compact.endswith(quote):
             base = compact[: -len(quote)]
-            return base if base in _CRYPTO_BASES else None
+            if base in _CRYPTO_BASES:
+                return base
+            if any_base and _ANY_CRYPTO_BASE.fullmatch(base or ""):
+                return base
+            return None
     return None
 
 

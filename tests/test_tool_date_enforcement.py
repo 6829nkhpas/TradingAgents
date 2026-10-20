@@ -49,16 +49,13 @@ def test_as_of_window(start, end, expected):
 
 
 DATED_TOOLS = [
-    tools.get_stock_data,
     tools.get_fundamentals,
     tools.get_balance_sheet,
     tools.get_cashflow,
     tools.get_income_statement,
     tools.get_news,
     tools.get_global_news,
-    tools.get_indicators,
     tools.get_macro_indicators,
-    tools.get_verified_market_snapshot,
 ]
 
 
@@ -69,7 +66,6 @@ def test_trade_date_is_hidden_from_the_model(tool):
 
 
 INSTRUMENT_TOOLS = [
-    tools.get_stock_data, tools.get_indicators, tools.get_verified_market_snapshot,
     tools.get_fundamentals, tools.get_balance_sheet, tools.get_cashflow,
     tools.get_income_statement, tools.get_news, tools.get_insider_transactions,
 ]
@@ -78,15 +74,15 @@ INSTRUMENT_TOOLS = [
 @pytest.mark.unit
 @pytest.mark.parametrize("tool", INSTRUMENT_TOOLS, ids=lambda t: t.name)
 def test_the_instrument_is_hidden_from_the_model(tool):
-    """The model once passed an indicator name as the symbol ("rsi", "atr" are
-    real tickers), and another company's data reached the report."""
+    """The model once passed another name as the symbol, and another company's
+    data reached the report."""
     properties = tool.tool_call_schema.model_json_schema()["properties"]
     assert "symbol" not in properties and "ticker" not in properties
 
 
 @pytest.mark.unit
 def test_a_tool_serves_the_run_instrument_whatever_the_model_passes():
-    args = _run(tools.get_indicators, {"symbol": "RSI", "indicator": "rsi", "curr_date": TRADE_DATE}, tools)
+    args = _run(tools.get_fundamentals, {"ticker": "RSI", "curr_date": TRADE_DATE}, tools)
     assert args[1] == "NVDA"
 
 
@@ -124,8 +120,8 @@ def test_future_curr_date_from_the_model_is_clamped():
 
 @pytest.mark.unit
 def test_future_window_from_the_model_is_clamped():
-    args = _run(tools.get_stock_data, {"start_date": "2026-08-01", "end_date": "2026-09-14"}, tools)
-    assert args == ("get_stock_data", "NVDA", "2026-08-01", TRADE_DATE)
+    args = _run(tools.get_news, {"start_date": "2026-08-01", "end_date": "2026-09-14"}, tools)
+    assert args == ("get_news", "NVDA", "2026-08-01", TRADE_DATE)
 
 
 @pytest.mark.unit
@@ -138,18 +134,18 @@ def test_direct_call_without_state_is_unchanged():
 # --- the run date itself (#1319) -------------------------------------------------
 
 @pytest.mark.unit
-@pytest.mark.parametrize("bad", ["2026-9-10", "2026-09-10 00:00", "Sept 10", None])
-def test_propagate_rejects_a_non_canonical_date(bad):
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
+@pytest.mark.parametrize("bad", ["2026-9-10", "2026-09-10 00:00", "Sept 10"])
+def test_research_rejects_a_non_canonical_date(bad):
+    from tradingagents.research import _canonical_analysis_date
 
     with pytest.raises(ValueError, match="YYYY-MM-DD"):
-        object.__new__(TradingAgentsGraph).propagate("AAPL", bad)
+        _canonical_analysis_date(bad)
 
 
 @pytest.mark.unit
-def test_propagate_rejects_a_future_date(monkeypatch):
-    import tradingagents.graph.trading_graph as tg
+def test_research_rejects_a_future_date(monkeypatch):
+    import tradingagents.research as research
 
-    monkeypatch.setattr(tg, "get_current_date", lambda: "2026-09-10")
+    monkeypatch.setattr(research, "get_current_date", lambda: "2026-09-10")
     with pytest.raises(ValueError, match="future"):
-        object.__new__(tg.TradingAgentsGraph).propagate("AAPL", "2026-09-11")
+        research._canonical_analysis_date("2026-09-11")

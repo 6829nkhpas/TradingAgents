@@ -15,10 +15,7 @@ import pytest
 from tradingagents.agents import tools
 from tradingagents.dataflows.date_window import get_current_date
 from tradingagents.dataflows.vendors import polymarket
-from tradingagents.dataflows.vendors.yahoo import (
-    fundamentals as yahoo_fundamentals,
-    market as yahoo_market,
-)
+from tradingagents.dataflows.vendors.yahoo import fundamentals as yahoo_fundamentals
 
 
 def _insider_frame(*dates):
@@ -31,7 +28,7 @@ def _insider_frame(*dates):
 
 def _yf_insider(frame, curr_date):
     ticker = mock.Mock(insider_transactions=frame)
-    with mock.patch.object(yahoo_market.yf, "Ticker", return_value=ticker):
+    with mock.patch.object(yahoo_fundamentals.yf, "Ticker", return_value=ticker):
         return yahoo_fundamentals.get_insider_transactions("AAPL", curr_date)
 
 
@@ -95,19 +92,6 @@ def test_a_current_run_is_not_cluttered_with_a_vintage_note(monkeypatch):
 
 
 @pytest.mark.unit
-def test_an_indicator_that_could_not_be_read_is_not_shown_as_a_blank_value():
-    """The per-day fallback returned an empty string for a failed read, so the
-    table rendered a row per day with nothing after the colon: an analyst reads
-    that as "no value on that day" rather than "could not be obtained"."""
-    from tradingagents.dataflows.errors import VendorError
-
-    with mock.patch.object(yahoo_market, "get_stock_stats",
-                           side_effect=RuntimeError("cache parse failed")), \
-            pytest.raises(VendorError):
-        yahoo_market.get_stockstats_indicator("AAPL", "rsi", "2026-05-08")
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("func, args", [
     # A past date withholds the live profile before any request, so the
     # fundamentals case is exercised on the date it does fetch.
@@ -124,7 +108,7 @@ def test_a_yfinance_failure_is_a_vendor_error_not_a_report(func, args):
     yfinance serves the default path, so this is the one that matters most."""
     from tradingagents.dataflows.errors import VendorError
 
-    with mock.patch.object(yahoo_market.yf, "Ticker", side_effect=RuntimeError("yahoo hiccup")), \
+    with mock.patch.object(yahoo_fundamentals.yf, "Ticker", side_effect=RuntimeError("yahoo hiccup")), \
             pytest.raises(VendorError):
         getattr(yahoo_fundamentals, func)(*args)
 
@@ -155,7 +139,7 @@ def test_an_unreachable_vendor_is_not_reported_as_a_missing_symbol(monkeypatch):
     from tradingagents.dataflows.vendors.yahoo import common
 
     empty = mock.Mock(quarterly_balance_sheet=pd.DataFrame(), balance_sheet=pd.DataFrame())
-    monkeypatch.setattr(yahoo_market.yf, "Ticker", lambda s: empty)
+    monkeypatch.setattr(yahoo_fundamentals.yf, "Ticker", lambda s: empty)
 
     monkeypatch.setattr(common, "vendor_reachable", lambda url: False)
     with pytest.raises(VendorUnavailableError, match="unreachable"):
@@ -187,29 +171,8 @@ def test_every_vendor_unavailable_says_so_rather_than_crashing(monkeypatch):
 
 
 @pytest.mark.unit
-def test_the_price_path_also_tells_an_outage_from_an_unknown_symbol(monkeypatch):
-    """Prices are the most-used path, so an outage there must not read as a
-    delisted symbol either."""
-    import pandas as pd
-
-    from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
-    from tradingagents.dataflows.vendors.yahoo import common
-
-    monkeypatch.setattr(yahoo_market.yf, "Ticker", lambda s: mock.Mock(history=lambda **k: pd.DataFrame()))
-
-    monkeypatch.setattr(common, "vendor_reachable", lambda url: False)
-    with pytest.raises(VendorUnavailableError, match="unreachable"):
-        yahoo_market.get_YFin_data_online("AAPL", "2026-09-01", "2026-09-10")
-
-    monkeypatch.setattr(common, "vendor_reachable", lambda url: True)
-    with pytest.raises(NoMarketDataError):
-        yahoo_market.get_YFin_data_online("AAPL", "2026-09-01", "2026-09-10")
-
-
-@pytest.mark.unit
 @pytest.mark.parametrize("func, args", [
     pytest.param(f, a, id=f.__name__) for f, a in (
-        (yahoo_market.get_YFin_data_online, ("AAPL", "2025-06-02", "2025-06-06")),
         (yahoo_fundamentals.get_balance_sheet, ("AAPL", "quarterly", "2025-06-06")),
         (yahoo_fundamentals.get_cashflow, ("AAPL", "quarterly", "2025-06-06")),
         (yahoo_fundamentals.get_income_statement, ("AAPL", "quarterly", "2025-06-06")),
@@ -227,7 +190,7 @@ def test_a_historical_run_is_not_told_todays_date(func, args):
                        quarterly_income_stmt=statement,
                        insider_transactions=_insider_frame("2025-05-30"),
                        history=lambda **k: prices)
-    with mock.patch.object(yahoo_market.yf, "Ticker", return_value=ticker):
+    with mock.patch.object(yahoo_fundamentals.yf, "Ticker", return_value=ticker):
         out = func(*args)
 
     assert date.today().isoformat() not in out

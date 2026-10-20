@@ -21,39 +21,55 @@ def _config_with_env(monkeypatch, **overrides):
 def test_no_env_uses_built_in_defaults(monkeypatch):
     config = _config_with_env(monkeypatch)
     assert config["llm_provider"] == "openai"
-    assert config["deep_think_llm"] == "gpt-6-sol"
     assert config["quick_think_llm"] == "gpt-6-luna"
     assert config["backend_url"] is None
-    assert config["max_debate_rounds"] == 1
-    assert config["checkpoint_enabled"] is False
+    assert config["max_tool_rounds"] == 8
+    assert config["llm_timeout"] == 90.0
+    assert config["max_concurrent_runs"] == 2
+    assert config["research_refresh_min_age_seconds"] == 0
+    assert config["research_persist_results"] is True
+    assert config["research_store_path"] is None
+
+
+def test_pipeline_only_keys_are_gone(monkeypatch):
+    config = _config_with_env(monkeypatch)
+    for key in (
+        "deep_think_llm", "results_dir", "memory_log_path", "checkpoint_enabled",
+        "max_debate_rounds", "max_risk_discuss_rounds", "benchmark_map",
+    ):
+        assert key not in config
 
 
 def test_string_overrides(monkeypatch):
     config = _config_with_env(
         monkeypatch,
         TRADINGAGENTS_LLM_PROVIDER="google",
-        TRADINGAGENTS_DEEP_THINK_LLM="gemini-3-pro-preview",
         TRADINGAGENTS_QUICK_THINK_LLM="gemini-3-flash-preview",
         TRADINGAGENTS_LLM_BACKEND_URL="https://example.invalid/v1",
         TRADINGAGENTS_OUTPUT_LANGUAGE="Chinese",
     )
     assert config["llm_provider"] == "google"
-    assert config["deep_think_llm"] == "gemini-3-pro-preview"
     assert config["quick_think_llm"] == "gemini-3-flash-preview"
     assert config["backend_url"] == "https://example.invalid/v1"
     assert config["output_language"] == "Chinese"
 
 
-def test_int_coercion(monkeypatch):
+def test_numeric_coercion(monkeypatch):
     config = _config_with_env(
         monkeypatch,
-        TRADINGAGENTS_MAX_DEBATE_ROUNDS="3",
-        TRADINGAGENTS_MAX_RISK_ROUNDS="2",
+        TRADINGAGENTS_MAX_TOOL_ROUNDS="5",
+        TRADINGAGENTS_MAX_CONCURRENT_RUNS="3",
+        TRADINGAGENTS_RESEARCH_REFRESH_MIN_AGE_SECONDS="60",
+        TRADINGAGENTS_RESEARCH_PERSIST="false",
+        TRADINGAGENTS_RESEARCH_STORE_PATH="/data/results.json",
+        TRADINGAGENTS_LLM_TIMEOUT="45",
     )
-    assert config["max_debate_rounds"] == 3
-    assert isinstance(config["max_debate_rounds"], int)
-    assert config["max_risk_discuss_rounds"] == 2
-    assert isinstance(config["max_risk_discuss_rounds"], int)
+    assert config["max_tool_rounds"] == 5 and isinstance(config["max_tool_rounds"], int)
+    assert config["max_concurrent_runs"] == 3
+    assert config["research_refresh_min_age_seconds"] == 60
+    assert config["research_persist_results"] is False
+    assert config["research_store_path"] == "/data/results.json"
+    assert config["llm_timeout"] == 45.0 and isinstance(config["llm_timeout"], float)
 
 
 @pytest.mark.parametrize(
@@ -63,13 +79,19 @@ def test_int_coercion(monkeypatch):
         ("false", False), ("False", False), ("0", False), ("no", False), ("off", False),
     ],
 )
-def test_bool_coercion(monkeypatch, raw, expected):
-    config = _config_with_env(monkeypatch, TRADINGAGENTS_CHECKPOINT_ENABLED=raw)
-    assert config["checkpoint_enabled"] is expected
+def test_bool_coercion(raw, expected):
+    assert default_config_module._coerce(raw, False) is expected
+
+
+@pytest.mark.parametrize("bad", ["treu", "flase", "maybe", "2", "enabled"])
+def test_invalid_bool_raises(bad):
+    """A misspelled boolean must fail loudly (like ints) instead of silently False."""
+    with pytest.raises(ValueError, match="expected a boolean"):
+        default_config_module._coerce(bad, True)
 
 
 def test_reasoning_thinking_overrides(monkeypatch):
-    """The provider reasoning/thinking knobs are env-configurable (non-interactive runs)."""
+    """The provider reasoning/thinking knobs are env-configurable."""
     config = _config_with_env(
         monkeypatch,
         TRADINGAGENTS_OPENAI_REASONING_EFFORT="high",
@@ -94,39 +116,23 @@ def test_empty_env_value_is_passthrough(monkeypatch):
     config = _config_with_env(
         monkeypatch,
         TRADINGAGENTS_LLM_PROVIDER="",
-        TRADINGAGENTS_MAX_DEBATE_ROUNDS="",
+        TRADINGAGENTS_MAX_TOOL_ROUNDS="",
     )
     assert config["llm_provider"] == "openai"
-    assert config["max_debate_rounds"] == 1
+    assert config["max_tool_rounds"] == 8
 
 
 def test_empty_path_value_keeps_the_default_path(monkeypatch):
-    """.env.example lists the path variables blank; uncommenting one made the
-    path empty, and the graph failed creating its directories."""
-    config = _config_with_env(
-        monkeypatch,
-        TRADINGAGENTS_RESULTS_DIR="",
-        TRADINGAGENTS_CACHE_DIR="",
-        TRADINGAGENTS_MEMORY_LOG_PATH="",
-    )
+    """.env.example lists the path variables blank; an empty value keeps the default."""
+    config = _config_with_env(monkeypatch, TRADINGAGENTS_CACHE_DIR="")
     home = default_config_module._TRADINGAGENTS_HOME
-    assert config["results_dir"] == os.path.join(home, "logs")
     assert config["data_cache_dir"] == os.path.join(home, "cache")
-    assert config["memory_log_path"] == os.path.join(home, "memory", "trading_memory.md")
 
 
 def test_invalid_int_raises(monkeypatch):
     """Garbage int values should surface a ValueError at import, not silently misconfigure."""
-    monkeypatch.setenv("TRADINGAGENTS_MAX_DEBATE_ROUNDS", "not-a-number")
-    with pytest.raises(ValueError, match="TRADINGAGENTS_MAX_DEBATE_ROUNDS"):
-        default_config_module.build_default_config()
-
-
-@pytest.mark.parametrize("bad", ["treu", "flase", "maybe", "2", "enabled"])
-def test_invalid_bool_raises(monkeypatch, bad):
-    """A misspelled boolean must fail loudly (like ints) instead of silently False."""
-    monkeypatch.setenv("TRADINGAGENTS_CHECKPOINT_ENABLED", bad)
-    with pytest.raises(ValueError, match="TRADINGAGENTS_CHECKPOINT_ENABLED"):
+    monkeypatch.setenv("TRADINGAGENTS_MAX_TOOL_ROUNDS", "not-a-number")
+    with pytest.raises(ValueError, match="TRADINGAGENTS_MAX_TOOL_ROUNDS"):
         default_config_module.build_default_config()
 
 

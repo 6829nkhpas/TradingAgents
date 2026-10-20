@@ -53,46 +53,46 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
 
     def test_rate_limit_subclass_caught_by_base(self):
         # A vendor-named rate-limit error skips to the next vendor in the chain.
-        set_config({"data_vendors": {"core_stock_apis": "alpha_vantage,yfinance"}})
+        set_config({"data_vendors": {"news_data": "alpha_vantage,yfinance"}})
 
         def _throttled(*a, **k):
             raise AlphaVantageRateLimitError("slow down")
 
         with mock.patch.dict(
             router.VENDOR_METHODS,
-            {"get_stock_data": {"alpha_vantage": _throttled, "yfinance": lambda *a, **k: "YF"}},
+            {"get_news": {"alpha_vantage": _throttled, "yfinance": lambda *a, **k: "YF"}},
             clear=False,
         ):
-            out = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+            out = router.route_to_vendor("get_news", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(out, "YF")
 
     def test_not_configured_falls_through_to_next_vendor(self):
-        set_config({"data_vendors": {"core_stock_apis": "alpha_vantage,yfinance"}})
+        set_config({"data_vendors": {"news_data": "alpha_vantage,yfinance"}})
 
         def _unconfigured(*a, **k):
             raise AlphaVantageNotConfiguredError("no key")
 
         with mock.patch.dict(
             router.VENDOR_METHODS,
-            {"get_stock_data": {"alpha_vantage": _unconfigured, "yfinance": lambda *a, **k: "YF"}},
+            {"get_news": {"alpha_vantage": _unconfigured, "yfinance": lambda *a, **k: "YF"}},
             clear=False,
         ):
-            out = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+            out = router.route_to_vendor("get_news", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(out, "YF")
 
     def test_sole_unconfigured_vendor_surfaces_the_error(self):
         # With no fallback, the not-configured condition must surface (not vanish).
-        set_config({"data_vendors": {"core_stock_apis": "alpha_vantage"}})
+        set_config({"data_vendors": {"news_data": "alpha_vantage"}})
 
         def _unconfigured(*a, **k):
             raise AlphaVantageNotConfiguredError("no key")
 
         with mock.patch.dict(
             router.VENDOR_METHODS,
-            {"get_stock_data": {"alpha_vantage": _unconfigured}},
+            {"get_news": {"alpha_vantage": _unconfigured}},
             clear=False,
         ), self.assertRaises(AlphaVantageNotConfiguredError):
-            router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+            router.route_to_vendor("get_news", "AAPL", "2026-01-01", "2026-01-10")
 
     def test_an_unavailable_vendor_keeps_absence_from_being_claimed(self):
         # The throttled vendor's coverage was never learned, so "no usable data
@@ -109,9 +109,9 @@ class RouterHandlesBaseTypesTests(unittest.TestCase):
         for chain in ({"yfinance": throttled, "alpha_vantage": not_covered},
                       {"yfinance": not_covered, "alpha_vantage": throttled},
                       {"alpha_vantage": timed_out, "yfinance": not_covered}):
-            set_config({"data_vendors": {"core_stock_apis": ",".join(chain)}})
-            with mock.patch.dict(router.VENDOR_METHODS, {"get_stock_data": chain}, clear=False):
-                out = router.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
+            set_config({"data_vendors": {"news_data": ",".join(chain)}})
+            with mock.patch.dict(router.VENDOR_METHODS, {"get_news": chain}, clear=False):
+                out = router.route_to_vendor("get_news", "AAPL", "2026-01-01", "2026-01-10")
             self.assertTrue(out.startswith("DATA_UNAVAILABLE"), out)
 
 

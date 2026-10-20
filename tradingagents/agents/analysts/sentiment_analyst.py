@@ -5,7 +5,8 @@ prompt, so the model reports on data it was given rather than inventing posts:
 
   1. News headlines: Yahoo Finance
   2. StockTwits messages: the cashtag stream, with Bullish/Bearish tags
-  3. Reddit posts: r/wallstreetbets, r/stocks, r/investing
+  3. Reddit posts: r/wallstreetbets, r/stocks, r/investing for stocks; the
+     coin's own subreddit and the crypto subreddits for crypto assets
 
 Each source is trimmed to the analysis window. With a TypeSafe key, the social
 posts are screened by Jev first (see post_screen). These feeds serve recent items
@@ -31,7 +32,7 @@ from tradingagents.agents.structured import (
     invoke_structured_or_freetext,
 )
 from tradingagents.agents.tools import get_news
-from tradingagents.dataflows.vendors.reddit import fetch_reddit_posts
+from tradingagents.dataflows.vendors.reddit import fetch_reddit_posts, subreddits_for
 from tradingagents.dataflows.vendors.stocktwits import fetch_stocktwits_messages
 
 
@@ -51,6 +52,7 @@ def create_sentiment_analyst(llm):
 
     def sentiment_analyst_node(state):
         ticker = state["company_of_interest"]
+        asset_type = state.get("asset_type", "stock")
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)
         instrument_context = get_instrument_context_from_state(state)
@@ -63,9 +65,12 @@ def create_sentiment_analyst(llm):
         # instead of leaking today's chatter into a backtest (#1220).
         screen = jev_screen(ticker)
         stocktwits_block = fetch_stocktwits_messages(
-            ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen
+            ticker, limit=30, start_date=start_date, end_date=end_date, screen=screen,
+            asset_type=asset_type,
         )
-        reddit_block = fetch_reddit_posts(ticker, start_date=start_date, end_date=end_date, screen=screen)
+        reddit_block = fetch_reddit_posts(
+            ticker, start_date=start_date, end_date=end_date, screen=screen, asset_type=asset_type,
+        )
 
         system_message = _build_system_message(
             ticker=ticker,
@@ -74,6 +79,7 @@ def create_sentiment_analyst(llm):
             news_block=news_block,
             stocktwits_block=stocktwits_block,
             reddit_block=reddit_block,
+            asset_type=asset_type,
         )
 
         prompt = ChatPromptTemplate.from_messages(
@@ -126,8 +132,30 @@ def _build_system_message(
     news_block: str,
     stocktwits_block: str,
     reddit_block: str,
+    asset_type: str = "stock",
 ) -> str:
     """Assemble the sentiment-analyst system message with structured data blocks."""
+    reddit_label = ", ".join(f"r/{s}" for s in subreddits_for(ticker, asset_type))
+    if asset_type == "crypto":
+        reddit_character = (
+            "Community discussion, without vote or comment counts. A coin's own "
+            "subreddit skews toward holders and enthusiasts; r/CryptoCurrency and "
+            "r/CryptoMarkets are broader and more mixed."
+        )
+        catalysts = (
+            "protocol upgrades, exchange listings or delistings, ETF and regulatory "
+            "news, hacks or security incidents, token unlocks, macro headlines, etc."
+        )
+    else:
+        reddit_character = (
+            "Community discussion, without vote or comment counts. Subreddit character "
+            "matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more "
+            "measured; r/investing longer-term)."
+        )
+        catalysts = (
+            "news of upcoming earnings, product launches, competitive threats, macro "
+            "headlines, etc."
+        )
     return f"""You are a financial market sentiment analyst. Your task is to produce a comprehensive sentiment report for {ticker} covering the period from {start_date} to {end_date}, drawing on three complementary data sources that have already been collected for you.
 
 ## Data sources (pre-fetched, in this prompt)
@@ -146,8 +174,8 @@ Fast-moving signal. Each message carries a user-labeled sentiment tag (Bullish /
 {stocktwits_block}
 <end_of_stocktwits>
 
-### Reddit posts — r/wallstreetbets, r/stocks, r/investing (past 7 days)
-Community discussion, without vote or comment counts. Subreddit character matters (r/wallstreetbets is often contrarian/exuberant; r/stocks more measured; r/investing longer-term).
+### Reddit posts — {reddit_label} (past 7 days)
+{reddit_character}
 
 <start_of_reddit>
 {reddit_block}
@@ -167,9 +195,9 @@ Community discussion, without vote or comment counts. Subreddit character matter
 
 6. **Be honest about data limits.** If StockTwits returned only a handful of messages, or one or more sources returned an "<unavailable>" placeholder, the sentiment read is less robust — flag this explicitly in the `confidence` field and the narrative. If the sources are silent on a given subreddit, say so.
 
-7. **Identify catalysts and risks** that emerge across sources — news of upcoming earnings, product launches, competitive threats, macro headlines, etc.
+7. **Identify catalysts and risks** that emerge across sources — {catalysts}
 
-8. **Past sentiment is not predictive.** Frame your conclusions as signal for the trader to weigh alongside fundamentals and technicals, not as a price call.
+8. **Past sentiment is not predictive.** Frame your conclusions as signal to weigh alongside news and fundamentals, not as a price call.
 
 ## Output fields
 

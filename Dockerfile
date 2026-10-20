@@ -8,17 +8,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 WORKDIR /build
 COPY . .
-ARG INSTALL_API=false
-RUN if [ "$INSTALL_API" = "true" ]; then \
-      pip install --no-cache-dir ".[api]"; \
-    else \
-      pip install --no-cache-dir .; \
-    fi
+RUN pip install --no-cache-dir .
 
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    TRADINGAGENTS_API_HOST=0.0.0.0 \
+    TRADINGAGENTS_API_PORT=8000
 
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
@@ -28,6 +25,8 @@ RUN useradd --create-home appuser \
 USER appuser
 WORKDIR /home/appuser/app
 
-COPY --from=builder --chown=appuser:appuser /build .
+EXPOSE 8000
 
-ENTRYPOINT ["tradingagents"]
+# The API has no auth unless TRADINGAGENTS_API_KEY is set: keep the container
+# on a private network, or set the key, before exposing the port.
+ENTRYPOINT ["tradingagents-api"]

@@ -20,7 +20,7 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
         _identity.cache_clear()
 
     def test_resolves_company_metadata_from_yfinance(self):
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             mock.return_value.info = {
                 "longName": "TOTO LTD.",
                 "shortName": "TOTO",
@@ -37,20 +37,20 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
         self.assertEqual(identity["exchange"], "PNK")
 
     def test_falls_back_to_short_name(self):
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             mock.return_value.info = {"shortName": "TOTO", "sector": "Industrials"}
             identity = resolve_instrument_identity("TOTDY")
         self.assertEqual(identity["company_name"], "TOTO")
 
     def test_skips_placeholder_values(self):
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             mock.return_value.info = {"longName": "  ", "sector": "None", "industry": "n/a"}
             identity = resolve_instrument_identity("TOTDY")
         self.assertEqual(identity, {})
 
     def test_fails_open_on_exception(self):
         with patch(
-            "tradingagents.dataflows.vendors.yahoo.market.yf.Ticker",
+            "tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker",
             side_effect=RuntimeError("rate limited"),
         ):
             self.assertEqual(resolve_instrument_identity("TOTDY"), {})
@@ -58,14 +58,14 @@ class ResolveInstrumentIdentityTests(unittest.TestCase):
     def test_a_failed_lookup_is_asked_again(self):
         # A long process (a backtest) must not run every later cell without an
         # identity because one request failed.
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             type(mock.return_value).info = property(lambda self: (_ for _ in ()).throw(TimeoutError()))
             self.assertEqual(resolve_instrument_identity("TOTDY"), {})
             type(mock.return_value).info = {"longName": "TOTO LTD."}
             self.assertEqual(resolve_instrument_identity("TOTDY")["company_name"], "TOTO LTD.")
 
     def test_result_is_cached(self):
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             mock.return_value.info = {"longName": "TOTO LTD."}
             first = resolve_instrument_identity("TOTDY")
             second = resolve_instrument_identity("TOTDY")
@@ -112,7 +112,7 @@ class GetInstrumentContextFromStateTests(unittest.TestCase):
 
     def test_fallback_is_network_free_ticker_only(self):
         # No instrument_context and no yfinance call — must not hit the network.
-        with patch("tradingagents.dataflows.vendors.yahoo.market.yf.Ticker") as mock:
+        with patch("tradingagents.dataflows.vendors.yahoo.fundamentals.yf.Ticker") as mock:
             context = get_instrument_context_from_state(
                 {"company_of_interest": "NVDA", "asset_type": "stock"}
             )

@@ -1,28 +1,17 @@
 services:
-  tradingagents:
-    build: .
-    env_file:
-      - .env
-    volumes:
-      - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
-    tty: true
-    stdin_open: true
-
   research-api:
-    build:
-      context: .
-      args:
-        INSTALL_API: "true"
+    build: .
     env_file:
       - .env
     environment:
       TRADINGAGENTS_API_HOST: 0.0.0.0
-      TRADINGAGENTS_API_PORT: ${TRADINGAGENTS_API_PORT:-8000}
+      TRADINGAGENTS_API_PORT: 8000
+    # Published on the loopback interface only: the API is unauthenticated
+    # unless TRADINGAGENTS_API_KEY is set.
     ports:
-      - "${TRADINGAGENTS_API_PORT:-8000}:${TRADINGAGENTS_API_PORT:-8000}"
+      - "127.0.0.1:${TRADINGAGENTS_API_PORT:-8000}:8000"
     volumes:
       - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
-    entrypoint: ["tradingagents-api"]
     restart: unless-stopped
 
   ollama:
@@ -32,19 +21,21 @@ services:
     profiles:
       - ollama
 
-  tradingagents-ollama:
+  research-api-ollama:
     build: .
     env_file:
       - .env
     environment:
-      - TRADINGAGENTS_LLM_PROVIDER=ollama
-      - OLLAMA_BASE_URL=http://ollama:11434/v1
+      TRADINGAGENTS_API_HOST: 0.0.0.0
+      TRADINGAGENTS_API_PORT: 8000
+      TRADINGAGENTS_LLM_PROVIDER: ollama
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+    ports:
+      - "127.0.0.1:${TRADINGAGENTS_API_PORT:-8000}:8000"
     volumes:
       - ${TRADINGAGENTS_DATA_DIR:-tradingagents_data}:/home/appuser/.tradingagents
     depends_on:
       - ollama
-    tty: true
-    stdin_open: true
     profiles:
       - ollama
 

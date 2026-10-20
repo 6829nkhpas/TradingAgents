@@ -12,10 +12,8 @@ from tradingagents.dataflows.vendors.alpha_vantage import (
     get_fundamentals as get_alpha_vantage_fundamentals,
     get_global_news as get_alpha_vantage_global_news,
     get_income_statement as get_alpha_vantage_income_statement,
-    get_indicator as get_alpha_vantage_indicator,
     get_insider_transactions as get_alpha_vantage_insider_transactions,
     get_news as get_alpha_vantage_news,
-    get_stock as get_alpha_vantage_stock,
 )
 from tradingagents.dataflows.vendors.fred import get_macro_data as get_fred_macro_data
 from tradingagents.dataflows.vendors.polymarket import (
@@ -33,28 +31,12 @@ from tradingagents.dataflows.vendors.yahoo.fundamentals import (
     get_income_statement as get_yfinance_income_statement,
     get_insider_transactions as get_yfinance_insider_transactions,
 )
-from tradingagents.dataflows.vendors.yahoo.market import (
-    get_stock_stats_indicators_window,
-    get_YFin_data_online,
-)
 from tradingagents.dataflows.vendors.yahoo.news import get_global_news_yfinance, get_news_yfinance
 
 logger = logging.getLogger(__name__)
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
-    "core_stock_apis": {
-        "description": "OHLCV stock price data",
-        "tools": [
-            "get_stock_data"
-        ]
-    },
-    "technical_indicators": {
-        "description": "Technical analysis indicators",
-        "tools": [
-            "get_indicators"
-        ]
-    },
     "fundamental_data": {
         "description": "Company fundamentals",
         "tools": [
@@ -90,21 +72,11 @@ TOOLS_CATEGORIES = {
 # analyst but are not core to a decision, so a vendor failure here degrades to a
 # sentinel instead of aborting the run (a bad LLM-supplied indicator, a missing
 # key, or a network blip should not crash an analysis over flavour data). Core
-# categories (prices, fundamentals, news) still raise so a broken primary is loud.
+# categories (fundamentals, news) still raise so a broken primary is loud.
 OPTIONAL_CATEGORIES = {"macro_data", "prediction_markets"}
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
-    # core_stock_apis
-    "get_stock_data": {
-        "alpha_vantage": get_alpha_vantage_stock,
-        "yfinance": get_YFin_data_online,
-    },
-    # technical_indicators
-    "get_indicators": {
-        "alpha_vantage": get_alpha_vantage_indicator,
-        "yfinance": get_stock_stats_indicators_window,
-    },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
@@ -190,7 +162,7 @@ def no_data_available(error: NoMarketDataError) -> str:
     # coverage, or stale data — not just a generic "unavailable".
     reason = f" ({error.detail})" if error.detail else ""
     return (
-        f"NO_DATA_AVAILABLE: No usable market data for '{error.symbol}'{resolved} from "
+        f"NO_DATA_AVAILABLE: No usable data for '{error.symbol}'{resolved} from "
         f"any configured vendor{reason}. The symbol may be invalid, delisted, "
         f"not covered, or the vendor returned stale data. Do not estimate or "
         f"fabricate values — report that data is unavailable for this symbol."
